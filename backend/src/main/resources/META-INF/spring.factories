@@ -1,0 +1,4 @@
+# Registers a startup FailureAnalyzer so a missing/unresolved GEMINI_API_KEY produces a clean
+# "APPLICATION FAILED TO START" message instead of a raw bean-instantiation stack trace.
+org.springframework.boot.diagnostics.FailureAnalyzer=\
+com.qacopilot.embedding.MissingApiKeyFailureAnalyzer

@@ -1,0 +1,58 @@
+spring:
+  application:
+    name: qa-copilot
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${POSTGRES_PORT:5432}/${POSTGRES_DB:ragdb}
+    username: ${POSTGRES_USER:rag}
+    password: ${POSTGRES_PASSWORD:rag_local_pw}
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+  servlet:
+    multipart:
+      max-file-size: 50MB
+      max-request-size: 50MB
+
+server:
+  port: 8080
+
+# --- RAG configuration (all tunable via env; see .env.example) ---
+rag:
+  embedding:
+    provider: mistral           # provider-agnostic: swap impl (mistral|gemini) without touching business logic
+    model: mistral-embed        # Mistral embedding model
+    dimension: 1024             # mistral-embed output dim; MUST match vector(N) in V1__init.sql
+  llm:
+    provider: mistral
+    model: mistral-small-latest # swappable Mistral chat model (used for generation in M2+)
+  mistral:
+    api-key: ${MISTRAL_API_KEY:} # REQUIRED, injected from environment; never hardcode. Empty
+                                 # default so an unset var fails fast with a clear message
+                                 # (see MissingApiKeyFailureAnalyzer) instead of leaking a placeholder.
+    base-url: https://api.mistral.ai/v1
+    embed-batch-size: 100
+  gemini:                        # kept for config-only switch-back; unused while provider=mistral
+    api-key: ${GEMINI_API_KEY:}
+    base-url: https://generativelanguage.googleapis.com/v1beta
+    embed-batch-size: 100
+  chunking:
+    max-chars: 1000
+    overlap-chars: 150
+    min-chars: 300              # don't snap a boundary earlier than this into a chunk
+  retrieval:
+    top-k: 5
+  gate:
+    # Cosine-similarity floor (range -1..1). Below this, the system refuses honestly.
+    # This is the ONE allowed numeric gate. NOT universal — it is TUNED per embedding
+    # model + corpus (see README "Tuning the threshold").
+    #
+    # Tuned for mistral-embed on the OS-notes corpus (2026-07-05):
+    #   in-corpus questions scored 0.79-0.84 (floor 0.79)
+    #   out-of-corpus questions scored 0.63-0.67 (ceiling 0.67)
+    # 0.75 sits in the gap, biased high to prevent false positives (fabrication risk)
+    # while keeping ~0.04 margin below the lowest real question.
+    similarity-threshold: 0.75
+
+logging:
+  level:
+    com.qacopilot: INFO

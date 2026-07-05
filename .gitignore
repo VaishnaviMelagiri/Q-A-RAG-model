@@ -1,0 +1,26 @@
+# --- Secrets (NEVER commit) ---
+.env
+*.env
+!.env.example
+
+# --- Java / Maven ---
+target/
+*.class
+*.jar
+*.war
+!.mvn/wrapper/maven-wrapper.jar
+
+# --- Node / React (frontend, later milestones) ---
+node_modules/
+frontend/build/
+frontend/dist/
+
+# --- IDE / OS ---
+.idea/
+*.iml
+.vscode/
+.DS_Store
+
+# --- Local corpus (do not commit user documents, but keep the folder) ---
+corpus/*
+!corpus/.gitkeep

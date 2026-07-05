@@ -1,0 +1,2 @@
+# Put real documents to ingest here. Contents are git-ignored (see .gitignore) so your
+# corpus is never committed. This file only keeps the directory present in the repo.
