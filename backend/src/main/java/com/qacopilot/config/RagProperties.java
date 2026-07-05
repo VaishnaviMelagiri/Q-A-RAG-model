@@ -108,8 +108,8 @@ public class RagProperties {
     }
 
     public static class Gate {
-        /** Cosine-similarity floor. The ONE allowed numeric gate; tune per corpus (see application.yml). */
-        private double similarityThreshold = 0.75;
+        /** Loose similarity pre-filter (layer 1); the LLM judge is the primary gate. See application.yml. */
+        private double similarityThreshold = 0.5;
         public double getSimilarityThreshold() { return similarityThreshold; }
         public void setSimilarityThreshold(double similarityThreshold) {
             this.similarityThreshold = similarityThreshold;

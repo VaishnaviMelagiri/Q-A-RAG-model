@@ -1,10 +1,8 @@
 package com.qacopilot.api;
 
-import com.qacopilot.gate.RelevanceGate;
-import com.qacopilot.gate.RelevanceGate.Decision;
-import com.qacopilot.retrieval.RetrievalService;
+import com.qacopilot.pipeline.AnswerResult;
+import com.qacopilot.pipeline.QueryService;
 import com.qacopilot.retrieval.ScoredChunk;
-import jakarta.validation.constraints.NotBlank;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -14,10 +12,10 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.List;
 
 /**
- * Query endpoint for Milestone 1: embed the query → semantic top-k retrieval → threshold gate.
- * Returns the matching chunks with their similarity scores, or an honest refusal if the best
- * match is below the configured threshold. (Grounded LLM answer + agentic loop arrive in
- * later milestones; this endpoint proves retrieval and honest refusal on their own.)
+ * Query endpoint. Runs the layered pipeline (pre-filter → LLM judge → grounded generation →
+ * groundedness verify) and returns either a grounded, verified answer with citations, or an
+ * honest refusal. The response makes every decision legible: which layer refused, the judge's
+ * reason, the best similarity, and any claims the verifier stripped.
  *
  * <pre>
  *   curl -X POST http://localhost:8080/api/query \
@@ -29,65 +27,64 @@ import java.util.List;
 @RequestMapping("/api")
 public class QueryController {
 
-    /** Kept exactly as specified: product is corpus-agnostic. */
-    private static final String REFUSAL = "I don't have information on that in the loaded documents.";
+    private final QueryService queryService;
 
-    private final RetrievalService retrieval;
-    private final RelevanceGate gate;
-
-    public QueryController(RetrievalService retrieval, RelevanceGate gate) {
-        this.retrieval = retrieval;
-        this.gate = gate;
+    public QueryController(QueryService queryService) {
+        this.queryService = queryService;
     }
 
     @PostMapping("/query")
     public ResponseEntity<QueryResponse> query(@RequestBody QueryRequest request) {
         String question = request.question() == null ? "" : request.question().strip();
         if (question.isEmpty()) {
-            return ResponseEntity.badRequest()
-                    .body(QueryResponse.refused("Question must not be blank.", null, List.of()));
+            return ResponseEntity.badRequest().body(QueryResponse.error("Question must not be blank."));
         }
-
-        List<ScoredChunk> candidates = retrieval.retrieve(question);
-        Decision decision = gate.evaluate(candidates);
-
-        if (!decision.relevant()) {
-            // Honest refusal: below threshold => no relevant context, do not guess.
-            return ResponseEntity.ok(QueryResponse.refused(REFUSAL, decision, List.of()));
-        }
-
-        List<Citation> citations = candidates.stream()
-                .map(c -> new Citation(c.sourceName(), c.chunkIndex(), c.startOffset(),
-                        c.endOffset(), round(c.similarity()), c.content()))
-                .toList();
-        return ResponseEntity.ok(new QueryResponse(true, null, round(decision.bestScore()),
-                decision.threshold(), citations));
+        return ResponseEntity.ok(QueryResponse.from(queryService.answer(question)));
     }
 
     private static double round(double v) {
         return Math.round(v * 10000.0) / 10000.0;
     }
 
-    public record QueryRequest(@NotBlank String question) {}
+    public record QueryRequest(String question) {}
 
     public record Citation(String sourceName, int chunkIndex, int startOffset, int endOffset,
                            double similarity, String excerpt) {}
 
     /**
-     * @param relevant   whether anything cleared the threshold
-     * @param message    refusal/validation message when not relevant; null otherwise
-     * @param bestScore  similarity of the best match (null when there were no candidates)
-     * @param threshold  the applied threshold (echoed for transparency/tuning)
-     * @param citations  retrieved chunks with scores (empty on refusal)
+     * @param refused           whether the system declined to answer
+     * @param refusedBy         layer that refused: "pre-filter" | "judge" | "verify" | null
+     * @param message           refusal/validation message (null when answered)
+     * @param answer            grounded, verified answer (null when refused)
+     * @param judgeReason       the LLM judge's rationale
+     * @param bestScore         best similarity from retrieval (null if no candidates)
+     * @param threshold         pre-filter threshold applied
+     * @param verified          whether the groundedness check completed
+     * @param citations         chunks considered/used, with scores
+     * @param unsupportedClaims claims the verifier removed
      */
-    public record QueryResponse(boolean relevant, String message, Double bestScore,
-                                Double threshold, List<Citation> citations) {
+    public record QueryResponse(boolean refused, String refusedBy, String message, String answer,
+                                String judgeReason, Double bestScore, Double threshold, boolean verified,
+                                List<Citation> citations, List<String> unsupportedClaims) {
 
-        static QueryResponse refused(String message, Decision decision, List<Citation> citations) {
-            Double best = (decision == null || Double.isInfinite(decision.bestScore()))
-                    ? null : Math.round(decision.bestScore() * 10000.0) / 10000.0;
-            Double threshold = decision == null ? null : decision.threshold();
-            return new QueryResponse(false, message, best, threshold, citations);
+        static QueryResponse from(AnswerResult r) {
+            List<Citation> citations = r.citations().stream()
+                    .map(QueryResponse::toCitation)
+                    .toList();
+            Double best = Double.isInfinite(r.bestScore()) ? null : round(r.bestScore());
+            return new QueryResponse(r.refused(), r.refusedBy(), r.message(), r.answer(),
+                    r.judgeReason(), best, r.threshold(), r.verified(),
+                    citations, r.unsupportedClaims());
+        }
+
+        static QueryResponse error(String message) {
+            return new QueryResponse(true, "request", message, null, null, null, null, false,
+                    List.of(), List.of());
+        }
+
+        private static Citation toCitation(ScoredChunk c) {
+            return new Citation(c.sourceName(), c.chunkIndex(), c.startOffset(), c.endOffset(),
+                    round(c.similarity()), c.content());
         }
     }
 }

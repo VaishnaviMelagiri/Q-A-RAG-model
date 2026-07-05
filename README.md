@@ -4,9 +4,10 @@ Ask questions against your own documents and get grounded answers with the exact
 they came from — or an honest *"I don't have information on that in the loaded documents."*
 The system answers **only** from whatever documents are currently loaded.
 
-> **Status: Milestone 1** — the RAG core: ingest → chunk → embed → store in pgvector → query →
-> semantic top-k retrieval → **relevance-threshold gate** (honest refusal). Grounded LLM answers
-> and the agentic loop come in later milestones.
+> **Status: Milestone 2** — RAG core + grounded answers. Ingest → chunk → embed → pgvector →
+> retrieve → **layered relevance guardrail** (similarity pre-filter → LLM judge → grounded
+> generation → groundedness verify) → answer + citations, or an honest refusal. The agentic loop
+> (query reformulation, answer-shape) comes in Milestone 3. See [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Stack
 - **Backend:** Spring Boot 3.3, Java 21
@@ -68,19 +69,22 @@ curl -F "files=@/path/to/your.pdf" http://localhost:8080/api/ingest
 # -> {"documents":1,"totalChunks":NN,"details":[...]}
 ```
 
-Ask an **in-corpus** question (expect citations with similarity scores):
+Ask an **in-corpus** question (expect a grounded `answer` + `citations`, `refused:false`):
 ```bash
 curl -X POST http://localhost:8080/api/query \
      -H 'Content-Type: application/json' \
      -d '{"question":"What is a deadlock?"}'
+# -> {"refused":false,"answer":"...[1]...","judgeReason":"...","bestScore":0.81,
+#     "verified":true,"citations":[...],"unsupportedClaims":[]}
 ```
 
-Ask an **out-of-corpus** question (expect the honest refusal):
+Ask an **out-of-corpus** question (expect the honest refusal + which layer refused):
 ```bash
 curl -X POST http://localhost:8080/api/query \
      -H 'Content-Type: application/json' \
      -d '{"question":"What is the capital of France?"}'
-# -> {"relevant":false,"message":"I don't have information on that in the loaded documents.", ...}
+# -> {"refused":true,"refusedBy":"judge","message":"I don't have information on that in the loaded documents.",
+#     "judgeReason":"The passages discuss operating systems, not geography.", ...}
 ```
 
 ## Tuning the relevance threshold
