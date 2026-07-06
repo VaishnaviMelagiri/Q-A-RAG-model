@@ -65,6 +65,7 @@ public class QueryController {
      */
     public record QueryResponse(boolean refused, String refusedBy, String message, String answer,
                                 String judgeReason, Double bestScore, Double threshold, boolean verified,
+                                int rounds, String reformulatedQuery, String answerShape,
                                 List<Citation> citations, List<String> unsupportedClaims) {
 
         static QueryResponse from(AnswerResult r) {
@@ -74,12 +75,13 @@ public class QueryController {
             Double best = Double.isInfinite(r.bestScore()) ? null : round(r.bestScore());
             return new QueryResponse(r.refused(), r.refusedBy(), r.message(), r.answer(),
                     r.judgeReason(), best, r.threshold(), r.verified(),
+                    r.rounds(), r.reformulatedQuery(), r.answerShape(),
                     citations, r.unsupportedClaims());
         }
 
         static QueryResponse error(String message) {
             return new QueryResponse(true, "request", message, null, null, null, null, false,
-                    List.of(), List.of());
+                    0, null, null, List.of(), List.of());
         }
 
         private static Citation toCitation(ScoredChunk c) {

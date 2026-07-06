@@ -1,5 +1,6 @@
 package com.qacopilot.pipeline;
 
+import com.qacopilot.config.RagProperties;
 import com.qacopilot.retrieval.RetrievalService;
 import com.qacopilot.retrieval.ScoredChunk;
 import org.slf4j.Logger;
@@ -9,16 +10,19 @@ import org.springframework.stereotype.Service;
 import java.util.List;
 
 /**
- * Orchestrates the layered query pipeline:
+ * Orchestrates the layered, agentic query pipeline:
  * <pre>
- *   retrieve (top-k)
+ *   retrieve(query)
  *   -> [1] similarity pre-filter   (cheap; drops obvious noise, no LLM call)
- *   -> [2] LLM relevance judge     (PRIMARY gate; refuse before generating if insufficient)
- *   -> [3] grounded generation     (LLM)
- *   -> [4] groundedness verify     (LLM; strip unsupported claims, refuse if none survive)
+ *   -> [2] LLM relevance judge     (PRIMARY gate; evaluated against the ORIGINAL question)
+ *   -> [3] grounded generation     (LLM; + lightweight answer-shape)
+ *   -> [4] groundedness verify     (LLM; strip unsupported claims)
+ *   on failure, AGENTIC LOOP: the LLM may reformulate the query and re-retrieve (bounded), with
+ *   same-chunks early-termination; the judge always evaluates the ORIGINAL question so a drifted
+ *   reformulation cannot yield a grounded answer to a different question.
  * </pre>
- * At most three LLM touchpoints (judge, generate, verify), and it stops at the first layer that
- * refuses — so an out-of-corpus question costs zero or one LLM call, not three.
+ * Stops at the first layer that refuses, so out-of-corpus questions cost few LLM calls. On the
+ * happy path (answer on first try) the loop adds zero extra calls.
  */
 @Service
 public class QueryService {
@@ -33,49 +37,99 @@ public class QueryService {
     private final RelevanceJudge judge;
     private final AnswerGenerator generator;
     private final GroundednessVerifier verifier;
+    private final QueryReformulator reformulator;
+    private final RagProperties props;
 
     public QueryService(RetrievalService retrieval, SimilarityPreFilter preFilter,
                         RelevanceJudge judge, AnswerGenerator generator,
-                        GroundednessVerifier verifier) {
+                        GroundednessVerifier verifier, QueryReformulator reformulator,
+                        RagProperties props) {
         this.retrieval = retrieval;
         this.preFilter = preFilter;
         this.judge = judge;
         this.generator = generator;
         this.verifier = verifier;
+        this.reformulator = reformulator;
+        this.props = props;
     }
 
     public AnswerResult answer(String question) {
-        List<ScoredChunk> candidates = retrieval.retrieve(question);
+        int maxReformulations = Math.max(0, props.getAgent().getMaxReformulations());
+        double threshold = props.getGate().getSimilarityThreshold();
 
-        // Layer 1: cheap similarity pre-filter — no LLM call.
-        SimilarityPreFilter.Decision pre = preFilter.evaluate(candidates);
-        if (!pre.passed()) {
-            log.info("Refused by pre-filter (bestScore={} < threshold={})", pre.bestScore(), pre.threshold());
-            return AnswerResult.refused("pre-filter", REFUSAL, null,
-                    pre.bestScore(), pre.threshold(), List.of(), List.of());
+        String currentQuery = question;
+        String reformulatedQuery = null;
+        List<Long> previousChunkIds = null;
+        int round = 0;
+
+        while (true) {
+            List<ScoredChunk> candidates = retrieval.retrieve(currentQuery);
+            List<Long> chunkIds = candidates.stream().map(ScoredChunk::chunkId).toList();
+            double bestScore = candidates.isEmpty()
+                    ? Double.NEGATIVE_INFINITY : candidates.get(0).similarity();
+
+            // Early termination: a reformulation that surfaces the exact same passages can't help.
+            if (previousChunkIds != null && chunkIds.equals(previousChunkIds)) {
+                log.info("Early termination at round {}: reformulation returned the same passages", round);
+                return AnswerResult.refused("judge", REFUSAL,
+                        "Reformulation retrieved the same passages, which were insufficient.",
+                        bestScore, threshold, candidates, List.of(), round, reformulatedQuery);
+            }
+
+            SimilarityPreFilter.Decision pre = preFilter.evaluate(candidates);
+            String blockedBy = "pre-filter";
+            String judgeReason = null;
+            List<String> unsupported = List.of();
+
+            if (pre.passed()) {
+                // Layer 2: judge ALWAYS evaluates the original question (intent preservation).
+                RelevanceJudge.Verdict verdict = judge.judge(question, candidates);
+                judgeReason = verdict.reason();
+                if (verdict.sufficient()) {
+                    AnswerGenerator.Draft draft = generator.generate(question, candidates);
+                    GroundednessVerifier.Result v = verifier.verify(draft.answer(), candidates);
+                    if (!v.answer().isBlank()) {
+                        // Citation-integrity guard: strip any [n] that doesn't map to a retrieved
+                        // passage (e.g. an in-text list number echoed as a citation).
+                        CitationGuard.Result cg = CitationGuard.sanitize(v.answer(), candidates.size());
+                        if (!cg.invalidCitations().isEmpty()) {
+                            log.warn("Stripped dangling citation markers {} (only [1..{}] exist) at round {}",
+                                    cg.invalidCitations(), candidates.size(), round);
+                        }
+                        if (!cg.hasValidCitation()) {
+                            log.warn("Answer has no valid citation after sanitizing at round {} "
+                                    + "(grounding still enforced by verify)", round);
+                        }
+                        return AnswerResult.answered(cg.answer(), judgeReason, bestScore, threshold,
+                                candidates, v.unsupportedClaims(), v.verified(),
+                                round, reformulatedQuery, draft.shape());
+                    }
+                    // Verify stripped everything: not answerable from these passages.
+                    blockedBy = "verify";
+                    unsupported = v.unsupportedClaims();
+                    log.info("Verify stripped all claims at round {}", round);
+                } else {
+                    blockedBy = "judge";
+                }
+            }
+
+            // No answer this round. Reformulate if budget remains, else refuse.
+            if (round >= maxReformulations) {
+                return AnswerResult.refused(blockedBy, REFUSAL, judgeReason,
+                        bestScore, threshold, candidates, unsupported, round, reformulatedQuery);
+            }
+
+            QueryReformulator.Outcome outcome = reformulator.reformulate(question, candidates);
+            if (!outcome.reformulated()) {
+                log.info("Not reformulating ({}); refusing at round {}", outcome.reason(), round);
+                return AnswerResult.refused(blockedBy, REFUSAL, judgeReason,
+                        bestScore, threshold, candidates, unsupported, round, reformulatedQuery);
+            }
+
+            previousChunkIds = chunkIds;
+            currentQuery = outcome.query();
+            reformulatedQuery = outcome.query();
+            round++;
         }
-
-        // Layer 2: LLM judge — the primary relevance decision, before we spend a generation call.
-        RelevanceJudge.Verdict verdict = judge.judge(question, candidates);
-        if (!verdict.sufficient()) {
-            log.info("Refused by judge: {}", verdict.reason());
-            return AnswerResult.refused("judge", REFUSAL, verdict.reason(),
-                    pre.bestScore(), pre.threshold(), candidates, List.of());
-        }
-
-        // Layer 3: grounded draft.
-        String draft = generator.generate(question, candidates);
-
-        // Layer 4: verify groundedness; refuse if nothing survives.
-        GroundednessVerifier.Result verified = verifier.verify(draft, candidates);
-        if (verified.answer().isBlank()) {
-            log.info("Refused by verify: no claims in the draft were supported by the sources");
-            return AnswerResult.refused("verify", REFUSAL, verdict.reason(),
-                    pre.bestScore(), pre.threshold(), candidates, verified.unsupportedClaims());
-        }
-
-        return AnswerResult.answered(verified.answer(), verdict.reason(),
-                pre.bestScore(), pre.threshold(), candidates,
-                verified.unsupportedClaims(), verified.verified());
     }
 }

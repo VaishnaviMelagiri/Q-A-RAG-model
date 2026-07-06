@@ -2,6 +2,7 @@ package com.qacopilot.pipeline;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.qacopilot.config.RagProperties;
 import com.qacopilot.llm.LlmClient;
 import com.qacopilot.retrieval.ScoredChunk;
 import org.slf4j.Logger;
@@ -37,18 +38,21 @@ public class RelevanceJudge {
 
     private final LlmClient llm;
     private final ObjectMapper mapper;
+    private final double temperature;
 
-    public RelevanceJudge(LlmClient llm, ObjectMapper mapper) {
+    public RelevanceJudge(LlmClient llm, ObjectMapper mapper, RagProperties props) {
         this.llm = llm;
         this.mapper = mapper;
+        this.temperature = props.getLlm().getJudgeTemperature();
     }
 
     public Verdict judge(String question, List<ScoredChunk> chunks) {
         String user = "Question: " + question + "\n\nPassages:\n"
                 + PromptSupport.numberedPassages(chunks);
-        String raw = llm.generate(SYSTEM, user);
+        // Deterministic temperature (default 0) so the primary relevance gate is repeatable.
+        String raw = llm.generate(SYSTEM, user, temperature);
         try {
-            JsonNode n = mapper.readTree(PromptSupport.stripJsonFences(raw));
+            JsonNode n = mapper.readTree(PromptSupport.extractJsonObject(raw));
             boolean sufficient = n.path("sufficient").asBoolean(false);
             String reason = n.path("reason").asText("");
             return new Verdict(sufficient, reason);

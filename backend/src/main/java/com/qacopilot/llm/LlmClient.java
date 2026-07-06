@@ -8,11 +8,24 @@ package com.qacopilot.llm;
 public interface LlmClient {
 
     /**
-     * Generate a completion for the given system + user prompts.
+     * Generate a completion for the given system + user prompts at the provider's default
+     * temperature (kept low so generation stays grounded rather than creative).
      *
      * @param systemPrompt instruction/role context (may be null or blank)
      * @param userPrompt   the user-facing content to respond to
      * @return the model's text response
      */
     String generate(String systemPrompt, String userPrompt);
+
+    /**
+     * Generate with an explicit sampling temperature. Classification-style decisions (e.g. the
+     * relevance judge) pass {@code 0} for deterministic, repeatable output; creative-leaning
+     * generation keeps the default. The default implementation ignores the temperature and uses
+     * the provider default, so simple test doubles need only implement the two-arg form.
+     *
+     * @param temperature sampling temperature (0 = deterministic/greedy)
+     */
+    default String generate(String systemPrompt, String userPrompt, double temperature) {
+        return generate(systemPrompt, userPrompt);
+    }
 }

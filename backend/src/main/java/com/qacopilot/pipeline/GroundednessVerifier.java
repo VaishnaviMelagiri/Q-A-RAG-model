@@ -31,7 +31,7 @@ public class GroundednessVerifier {
             passages. Judge support against the passages ONLY — never outside knowledge.
 
             Return ONLY a JSON object, no prose, no code fences:
-            {"supported_answer": "<the draft with unsupported claims removed; keep [n] citations>",
+            {"supported_answer": "<the draft with unsupported claims removed; keep the [S#] citations exactly>",
              "unsupported_claims": ["<each removed/unsupported claim>", ...]}
 
             If every claim is supported, return the draft unchanged with an empty list.
@@ -50,7 +50,7 @@ public class GroundednessVerifier {
                 + "Draft answer:\n" + draft;
         String raw = llm.generate(SYSTEM, user);
         try {
-            JsonNode n = mapper.readTree(PromptSupport.stripJsonFences(raw));
+            JsonNode n = mapper.readTree(PromptSupport.extractJsonObject(raw));
             String supported = n.path("supported_answer").asText("").strip();
             List<String> unsupported = new ArrayList<>();
             n.path("unsupported_claims").forEach(x -> unsupported.add(x.asText()));

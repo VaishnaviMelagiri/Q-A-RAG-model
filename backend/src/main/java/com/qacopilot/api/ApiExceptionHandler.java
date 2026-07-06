@@ -21,9 +21,19 @@ public class ApiExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(ApiExceptionHandler.class);
 
-    /** Upstream provider (e.g. Gemini) returned an error status — surface its body verbatim. */
+    /** Upstream provider returned an error status — surface it clearly (rate-limit gets its own message). */
     @ExceptionHandler(RestClientResponseException.class)
     public ResponseEntity<ApiError> handleUpstream(RestClientResponseException ex, HttpServletRequest req) {
+        // 429 survives retry/backoff only under sustained load — surface it as a distinct, retryable
+        // condition rather than a generic upstream error, so callers know to slow down, not that the
+        // answer is unavailable. (Free-tier limits are the usual cause; see ARCHITECTURE.md.)
+        if (ex.getStatusCode().value() == 429) {
+            log.warn("Upstream rate limited on {} (429 persisted after retries)", req.getRequestURI());
+            return build(HttpStatus.SERVICE_UNAVAILABLE, "Provider rate limited",
+                    "The embedding/LLM provider is rate limiting requests (HTTP 429) and retries were "
+                    + "exhausted. Retry shortly; on a free tier, reduce concurrency or space out requests.",
+                    req);
+        }
         log.error("Upstream API error on {}", req.getRequestURI(), ex);
         String detail = "Embedding/LLM provider returned "
                 + ex.getStatusCode().value() + ". Response: " + ex.getResponseBodyAsString();

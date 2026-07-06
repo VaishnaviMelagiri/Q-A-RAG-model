@@ -1,6 +1,7 @@
 package com.qacopilot.embedding;
 
 import com.qacopilot.config.RagProperties;
+import com.qacopilot.support.UpstreamRetry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -73,11 +74,13 @@ public class MistralEmbeddingClient implements EmbeddingClient {
     }
 
     private List<float[]> embedBatch(List<String> texts) {
-        EmbeddingResponse res = http.post()
-                .uri("/embeddings")
-                .body(new EmbeddingRequest(model, texts))
-                .retrieve()
-                .body(EmbeddingResponse.class);
+        EmbeddingResponse res = UpstreamRetry.call("Mistral embeddings",
+                props.getMistral().getMaxRetries(), props.getMistral().getRetryBackoffMillis(), () ->
+                http.post()
+                        .uri("/embeddings")
+                        .body(new EmbeddingRequest(model, texts))
+                        .retrieve()
+                        .body(EmbeddingResponse.class));
         if (res == null || res.data() == null || res.data().size() != texts.size()) {
             throw new IllegalStateException("Mistral embedding count mismatch");
         }

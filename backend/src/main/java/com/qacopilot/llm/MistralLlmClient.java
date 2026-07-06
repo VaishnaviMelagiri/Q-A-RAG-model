@@ -2,6 +2,7 @@ package com.qacopilot.llm;
 
 import com.qacopilot.config.RagProperties;
 import com.qacopilot.embedding.MissingApiKeyException;
+import com.qacopilot.support.UpstreamRetry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -17,17 +18,20 @@ import java.util.List;
  * {@link LlmClient} backed by the Mistral chat API ({@code /chat/completions}, OpenAI-shaped,
  * {@code Authorization: Bearer} auth). The chat model name comes from config
  * ({@code rag.llm.model}) so it is swappable. Low temperature by default to keep generation
- * grounded rather than creative.
+ * grounded rather than creative; callers can pass an explicit temperature (e.g. {@code 0} for
+ * the relevance judge) via the three-arg {@link #generate(String, String, double)} overload.
  */
 @Component
 @ConditionalOnProperty(prefix = "rag.llm", name = "provider", havingValue = "mistral", matchIfMissing = true)
 public class MistralLlmClient implements LlmClient {
 
     private static final Logger log = LoggerFactory.getLogger(MistralLlmClient.class);
-    private static final double TEMPERATURE = 0.2;
+    private static final double DEFAULT_TEMPERATURE = 0.2;
 
     private final RestClient http;
     private final String model;
+    private final int maxRetries;
+    private final long retryBackoffMillis;
 
     public MistralLlmClient(RagProperties props) {
         String apiKey = props.getMistral().getApiKey();
@@ -36,6 +40,8 @@ public class MistralLlmClient implements LlmClient {
                 "MISTRAL_API_KEY is not set (resolved value: '" + apiKey + "').");
         }
         this.model = props.getLlm().getModel();
+        this.maxRetries = props.getMistral().getMaxRetries();
+        this.retryBackoffMillis = props.getMistral().getRetryBackoffMillis();
         this.http = RestClient.builder()
                 .baseUrl(props.getMistral().getBaseUrl())
                 .defaultHeader(HttpHeaders.AUTHORIZATION, "Bearer " + apiKey)
@@ -46,17 +52,23 @@ public class MistralLlmClient implements LlmClient {
 
     @Override
     public String generate(String systemPrompt, String userPrompt) {
+        return generate(systemPrompt, userPrompt, DEFAULT_TEMPERATURE);
+    }
+
+    @Override
+    public String generate(String systemPrompt, String userPrompt, double temperature) {
         List<Message> messages = new ArrayList<>();
         if (systemPrompt != null && !systemPrompt.isBlank()) {
             messages.add(new Message("system", systemPrompt));
         }
         messages.add(new Message("user", userPrompt));
 
-        ChatResponse res = http.post()
-                .uri("/chat/completions")
-                .body(new ChatRequest(model, messages, TEMPERATURE))
-                .retrieve()
-                .body(ChatResponse.class);
+        ChatResponse res = UpstreamRetry.call("Mistral chat", maxRetries, retryBackoffMillis, () ->
+                http.post()
+                        .uri("/chat/completions")
+                        .body(new ChatRequest(model, messages, temperature))
+                        .retrieve()
+                        .body(ChatResponse.class));
         if (res == null || res.choices() == null || res.choices().isEmpty()) {
             throw new IllegalStateException("Mistral returned no chat completion");
         }

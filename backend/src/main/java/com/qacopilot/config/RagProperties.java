@@ -26,6 +26,8 @@ public class RagProperties {
     private Retrieval retrieval = new Retrieval();
     @NestedConfigurationProperty
     private Gate gate = new Gate();
+    @NestedConfigurationProperty
+    private Agent agent = new Agent();
 
     public Embedding getEmbedding() { return embedding; }
     public void setEmbedding(Embedding embedding) { this.embedding = embedding; }
@@ -41,6 +43,8 @@ public class RagProperties {
     public void setRetrieval(Retrieval retrieval) { this.retrieval = retrieval; }
     public Gate getGate() { return gate; }
     public void setGate(Gate gate) { this.gate = gate; }
+    public Agent getAgent() { return agent; }
+    public void setAgent(Agent agent) { this.agent = agent; }
 
     public static class Embedding {
         private String provider = "mistral";
@@ -57,10 +61,18 @@ public class RagProperties {
     public static class Llm {
         private String provider = "mistral";
         private String model = "mistral-small-latest";
+        /**
+         * Temperature for the relevance judge (and other classification-style gates). Default 0
+         * for deterministic, repeatable refuse/answer decisions — so the loop's behavior is stable
+         * run-to-run. Generation/verify keep the provider's warmer default for natural phrasing.
+         */
+        private double judgeTemperature = 0.0;
         public String getProvider() { return provider; }
         public void setProvider(String provider) { this.provider = provider; }
         public String getModel() { return model; }
         public void setModel(String model) { this.model = model; }
+        public double getJudgeTemperature() { return judgeTemperature; }
+        public void setJudgeTemperature(double judgeTemperature) { this.judgeTemperature = judgeTemperature; }
     }
 
     /** Mistral API auth + endpoint (OpenAI-shaped, Bearer-token auth). */
@@ -68,12 +80,20 @@ public class RagProperties {
         private String apiKey;
         private String baseUrl = "https://api.mistral.ai/v1";
         private int embedBatchSize = 100;
+        /** Total attempts (incl. first) for a transient upstream call (429 / 5xx / network). */
+        private int maxRetries = 3;
+        /** Base backoff between retries (ms); grows exponentially, honoring Retry-After if sent. */
+        private long retryBackoffMillis = 500;
         public String getApiKey() { return apiKey; }
         public void setApiKey(String apiKey) { this.apiKey = apiKey; }
         public String getBaseUrl() { return baseUrl; }
         public void setBaseUrl(String baseUrl) { this.baseUrl = baseUrl; }
         public int getEmbedBatchSize() { return embedBatchSize; }
         public void setEmbedBatchSize(int embedBatchSize) { this.embedBatchSize = embedBatchSize; }
+        public int getMaxRetries() { return maxRetries; }
+        public void setMaxRetries(int maxRetries) { this.maxRetries = maxRetries; }
+        public long getRetryBackoffMillis() { return retryBackoffMillis; }
+        public void setRetryBackoffMillis(long retryBackoffMillis) { this.retryBackoffMillis = retryBackoffMillis; }
     }
 
     /** Kept so the provider can be switched back via config without code changes. */
@@ -114,5 +134,21 @@ public class RagProperties {
         public void setSimilarityThreshold(double similarityThreshold) {
             this.similarityThreshold = similarityThreshold;
         }
+    }
+
+    /** Agentic loop (M3): query reformulation. */
+    public static class Agent {
+        /** Max reformulation rounds after the first retrieval (0 disables the loop). */
+        private int maxReformulations = 1;
+        /**
+         * Scope-drift guard: a reformulated query must stay at least this cosine-similar to the
+         * original question (else it's rejected as topic drift). Prevents grounded answers to a
+         * DIFFERENT question than asked.
+         */
+        private double reformulationMinSimilarity = 0.6;
+        public int getMaxReformulations() { return maxReformulations; }
+        public void setMaxReformulations(int maxReformulations) { this.maxReformulations = maxReformulations; }
+        public double getReformulationMinSimilarity() { return reformulationMinSimilarity; }
+        public void setReformulationMinSimilarity(double v) { this.reformulationMinSimilarity = v; }
     }
 }

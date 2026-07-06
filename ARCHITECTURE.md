@@ -52,6 +52,18 @@ Why layered rather than a single threshold:
 Both LLM stages **fail safe**: unparseable judge output ⇒ treated as insufficient (refuse);
 unparseable verifier output ⇒ answer returned but flagged `verified=false` for transparency.
 
+**Deterministic judge (why the loop is stable).** The relevance judge is a classification-style
+decision, so it runs at temperature **0** (`rag.llm.judge-temperature`, threaded through
+`LlmClient.generate(system, user, temperature)`); generation and verify keep the warmer default
+(0.2) for natural phrasing. This matters for the agentic loop: at a warmer temperature the judge
+can flip its verdict run-to-run on a *borderline* retrieval (same question sometimes answered,
+sometimes reformulated), which makes the loop's behavior non-reproducible. Temperature 0 makes
+the refuse/answer decision repeatable — whatever the modal decision is, it is now stable — so a
+query that triggers reformulation triggers it *every* run. Note the tradeoff we deliberately did
+**not** make: lowering temperature does not change *how lenient* the judge is, only its variance,
+so it cannot manufacture a rescue out of a borderline case — it only makes the observed behavior
+deterministic.
+
 **Defense-in-depth note (verify not yet stress-exercised).** In testing against the OS-notes
 corpus, partially-covered and out-of-corpus questions (e.g. "exact Linux page sizes",
 "Banker's algorithm with a full numerical example", "who invented the OS") were all correctly
@@ -75,6 +87,50 @@ usage** per answered question — relevant on a free tier (e.g. Mistral rate lim
 tight, options are: fold judge+generate into one call, make verify optional via config, or cache
 judge verdicts. Kept as three explicit stages here for clarity and a strong groundedness story.
 
+**Free-tier rate limiting & upstream resilience.** Because a single query can spend several
+provider calls (embed + judge + reformulate + generate + verify), a burst of requests — or the
+extra calls an off-topic query makes on the judge/reformulate path — can trip the provider's
+free-tier rate limit (HTTP 429). Every Mistral call (chat and embeddings) is therefore wrapped in
+`UpstreamRetry`, which retries **429 / 5xx / network** errors with exponential backoff (honoring
+`Retry-After` when present); other 4xx (bad request, auth) fail fast since retrying can't help.
+Retries and base backoff are configurable (`rag.mistral.max-retries`, `rag.mistral.retry-backoff-millis`).
+If 429 still persists after retries, `ApiExceptionHandler` returns a distinct **503 "Provider rate
+limited"** with a retry hint — never a generic 500, and never a false "not in the documents"
+refusal (a rate-limit is an infrastructure condition, not a relevance decision).
+
+**Bad LLM output never crashes the refusal path.** All four LLM stages isolate the response with
+`PromptSupport.extractJsonObject` (tolerates code fences and prose wrapped around the JSON) and
+**fail safe** on unparseable output: the judge treats it as insufficient (refuse), the reformulator
+declines, the generator falls back to raw-as-prose, the verifier flags `verified=false`. A burst of
+off-topic queries against a garbage-returning LLM is covered by `RefusalRobustnessTest` — it must
+always refuse cleanly and never throw a 5xx.
+
+### Citation integrity (`CitationGuard`)
+The project promises "every answer cites the retrieved chunks it used", so an inline citation must
+map to a real retrieved passage. The failure we hit: passages carry their own numbers (a source
+list item "7. Real-Time Operating Systems…"), and when passages were labeled with a plain `[n]`,
+the model reliably cited the **in-text number** (`[7]`) instead of the passage label — a dangling
+citation pointing at nothing in `citations[]`. Prompting alone did not stop it.
+
+The fix is mechanical, not a prompt plea: passages are labeled with an **`S`-prefixed, non-collidable
+token** `[S1]..[SN]` (see `PromptSupport.numberedPassages`). An `[S1]` token never appears in source
+prose, so the model copies the real label; any bare `[7]` it still echoes is unambiguously *not* a
+label. `CitationGuard` then runs on the final (post-verify) answer:
+- **A marker that is not a valid `[S#]` with 1 ≤ # ≤ N (a bare `[7]`, or an out-of-range `[S9]`) is
+  stripped; the sentence is kept.** Rationale: grounding is the **verify** layer's job — it checks
+  each claim against the passages regardless of markers — so a wrong *attribution* should not delete
+  otherwise-grounded content. (The alternative, treating an invalid-only-citation sentence as
+  unsupported, was considered and rejected as double-jeopardy with verify.) Stripped markers are logged.
+- **Valid `[S#]` labels are preserved untouched** and map positionally to `citations[#-1]`. The
+  generator prompt reinforces this (cite only `[S#]`, never a bare in-text number), so the guard is a
+  deterministic backstop, not the sole mechanism.
+- **The inverse ("a factual sentence with no citation")** is only handled mechanically for the
+  wholesale case: if a non-refusal answer has **zero** valid citations, that is logged. Deciding
+  whether an *individual* uncited sentence is a factual claim that *should* be cited is a semantic
+  judgment, **out of scope** for a mechanical guard (it would false-positive on framing/coverage
+  sentences); the safety-critical subset — ungrounded content — is already removed by the **verify**
+  layer whether or not it carries a marker. Covered by `CitationGuardTest`.
+
 ## Legibility
 Every `/query` response reports the full decision trail: `refused`, `refusedBy`
 (`pre-filter`/`judge`/`verify`), `judgeReason`, `bestScore`, `threshold`, `verified`,
@@ -86,8 +142,72 @@ Every `/query` response reports the full decision trail: `refused`, `refusedBy`
 Mistral (Bearer auth, OpenAI-shaped API); a Gemini embedding impl is retained. Missing API key
 fails fast at startup via a `FailureAnalyzer` (key length logged, never the key).
 
-## What makes it agentic (roadmap)
-The LLM already controls the relevance/groundedness decisions. The remaining agentic control
-points (Milestone 3): **query reformulation + re-retrieve** when retrieval/verify is weak (the
-LLM's decision, not a blind retry), and the **answer-shape decision** (prose vs. code snippet).
-These build on the layered pipeline above.
+## What makes it agentic (Milestone 3, implemented)
+The LLM controls not just relevance/groundedness but **retrieval itself** and **output shape**:
+
+- **Query reformulation + re-retrieve (bounded loop).** When a round fails (judge says
+  insufficient, or verify strips everything), the LLM *decides* whether a faithful reformulation
+  could retrieve better passages and, if so, produces one; otherwise the system refuses. It is a
+  real decision — the LLM can decline — not a blind retry. Round cap is configurable
+  (`rag.agent.max-reformulations`, default 1) to bound latency/quota.
+- **Same-chunks early-termination.** If a reformulated query retrieves the exact same chunk IDs
+  as the previous round, the loop stops immediately (it cannot produce a different outcome),
+  saving the judge/generate/verify calls.
+- **Scope-drift guard (three layers).** A reformulation that silently changed the topic into
+  something the corpus covers would produce a grounded answer to a *different* question — a
+  fabrication failure mode. Defenses: (1) the reformulation prompt permits only acronym/synonym
+  expansion or splitting a compound question; (2) a programmatic guard rejects a reformulation
+  whose query embedding drifts from the original below `rag.agent.reformulation-min-similarity`
+  (cosine, default 0.6); (3) the judge **always evaluates the original question**, so off-topic
+  retrieval still fails relevance.
+- **Answer-shape decision (lightweight).** Generation also tags the answer as `prose` or `code`
+  in the same call (no extra round-trip). On a prose corpus this is always `prose`; it
+  generalizes to code-documentation corpora.
+
+Cost: on the happy path (answer on first try) the loop adds **zero** extra calls. The extra
+round fires only on weak retrieval, capped at one reformulation by default. Each response
+reports `rounds` and `reformulatedQuery` so the agentic path is as legible as every other stage.
+
+### Loop (pseudocode)
+```
+round = 0; query = question
+loop:
+  chunks = retrieve(query)
+  if chunks == previous chunks: refuse (early-termination)
+  if pre-filter passes AND judge(original question, chunks) sufficient:
+      draft = generate(original question, chunks); verified = verify(draft, chunks)
+      if verified non-empty: return answer
+  if round >= max_reformulations: refuse
+  outcome = reformulator.decide(original question, chunks)   # LLM; may decline; drift-guarded
+  if not outcome.reformulated: refuse
+  previous = chunks; query = outcome.query; round += 1
+```
+
+### Worked end-to-end example (canonical)
+The agentic loop is proven two ways:
+
+1. **Deterministically, by unit test.** `QueryServiceTest.reformulationFlipsRefusalIntoGroundedAnswer`
+   drives the loop with mocked collaborators: judge insufficient on the first retrieval → reformulate
+   → judge sufficient on the second → grounded, `[S1]`-cited, verified answer. Same-chunks
+   early-termination and the round cap are covered by sibling tests; `RefusalRobustnessTest` proves a
+   burst of off-topic queries always refuses and never 5xxes; `CitationGuardTest` covers the citation
+   guard.
+2. **Naturally, on the real corpus.** A real, unedited response is saved at
+   [`docs/examples/agentic-rtos-rescue.json`](docs/examples/agentic-rtos-rescue.json). Query
+   *"Tell me about RTOS"*:
+   - First-pass retrieval on the terse query is weak, so the loop **reformulates** to
+     `"What is a Real-Time Operating System (RTOS) and where is it used?"` (`rounds: 1`).
+   - The **judge** (evaluating the *original* question) passes the reformulated retrieval.
+   - The **grounded answer** cites `[S1]`, which maps to `citations[0]` — chunk 2 of the OS notes,
+     whose text is *"7. Real-Time Operating Systems (RTOS): RTOS is designed for systems that require
+     deterministic and real-time response…"*. The content matches exactly, and the `S`-prefixed label
+     is what stopped the model from echoing the document's in-text "7." as a bogus `[7]` citation.
+   - **Verify** completed (`verified: true`); on this run every sentence was supported, so
+     `unsupportedClaims` is empty. (Verify is nondeterministic and does strip ungrounded sentences on
+     other runs — it is the backstop for the case the judge admits but the generator drifts.)
+
+   The loop triggers naturally only because the corpus is large enough that a terse query's first-pass
+   retrieval can miss: this two-document corpus (OS notes + `corpus/DBMS_Full_Notes.md`, ~81 chunks
+   total) is what makes "RTOS" a reliable rescue. On a 31-chunk corpus, top-k=5 retrieval was too
+   forgiving for the loop to fire consistently. Off-topic queries (e.g. *"capital of France"*) still
+   **fail safe to refusal** at the judge layer regardless of corpus size.

@@ -25,6 +25,8 @@ rag:
   llm:
     provider: mistral
     model: mistral-small-latest # swappable Mistral chat model (used for generation in M2+)
+    judge-temperature: 0.0      # relevance judge runs deterministic (0) so refuse/answer is
+                                # repeatable run-to-run; generation/verify keep the warmer default.
   mistral:
     api-key: ${MISTRAL_API_KEY:} # REQUIRED, injected from environment; never hardcode. Empty
                                  # default so an unset var fails fast with a clear message
