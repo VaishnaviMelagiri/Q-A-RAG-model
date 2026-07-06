@@ -30,6 +30,12 @@ public class IngestionService {
         this.store = store;
     }
 
+    /** Remove all currently-loaded documents. Backs replace-on-upload and the explicit clear. */
+    public void clearCorpus() {
+        store.clearAll();
+        log.info("Corpus cleared");
+    }
+
     public IngestResult ingest(String filename, byte[] bytes) {
         RawDoc doc = loader.load(filename, bytes);
         List<Chunk> chunks = chunker.chunk(doc.text());

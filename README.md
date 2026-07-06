@@ -70,6 +70,16 @@ curl -F "files=@/path/to/your.pdf" http://localhost:8080/api/ingest
 # -> {"documents":1,"totalChunks":NN,"details":[...]}
 ```
 
+> **Corpus model — replace-on-upload (single-session demo).** Each upload **replaces** the current
+> document set (the store is cleared, then the upload is loaded), so answers only ever come from
+> the most recently uploaded docs. See what's loaded and clear it explicitly:
+> ```bash
+> curl http://localhost:8080/api/corpus            # {"documents":N,"totalChunks":M,"sources":[...]}
+> curl -X DELETE http://localhost:8080/api/corpus  # clear all
+> ```
+> This is a single-session model with a shared store; per-session isolation for true multi-user
+> concurrency is the documented next step (see ARCHITECTURE.md → "Corpus management").
+
 Ask an **in-corpus** question (expect a grounded `answer` + `citations`, `refused:false`):
 ```bash
 curl -X POST http://localhost:8080/api/query \
@@ -132,3 +142,15 @@ corpus/  (git-ignored) — put your real documents here
 ```bash
 cd backend && ./mvnw test
 ```
+
+## Frontend (chat UI)
+A minimal React + Vite chat UI lives in [`frontend/`](frontend/) — clickable `[S#]` citations,
+the honest-refusal state, and the agentic "↻ reformulated" badge, all made visible. It talks to
+this backend via a Vite dev proxy (`/api/*` → `:8080`), so **no CORS config is needed**.
+```bash
+# backend must be running on :8080 with the corpus ingested first
+cd frontend && npm install && npm run dev   # open http://localhost:5173
+```
+Demo beats: *“What is a deadlock?”* (cited answer → click a chip), *“Tell me about RTOS”*
+(reformulation badge), *“What is the capital of France?”* (honest refusal). See
+[frontend/README.md](frontend/README.md) for details.

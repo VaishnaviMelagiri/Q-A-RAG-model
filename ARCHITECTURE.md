@@ -29,6 +29,24 @@ load (PDF/MD/TXT/HTML) -> chunk (overlapping, exact offsets) -> embed (real mode
 - **pgvector** — `vector(1024)` column, HNSW index with `vector_cosine_ops`. *Tradeoff:* HNSW
   gives fast, high-recall approximate search; cosine matches how we score similarity.
 
+## Corpus management (scope & limitation)
+The product model is ephemeral: **upload → ask → clear → repeat**, so each document set stands
+alone and answers never draw on previously-loaded data.
+- **Replace-on-upload.** `POST /api/ingest` **clears the store, then loads the uploaded set**, so
+  there is only ever one current document set. Uploading doc B when doc A was loaded answers about
+  B only — no manual clear needed. (The clear runs *after* the empty-files guard, so a bad request
+  never wipes an existing corpus.)
+- **Visibility & explicit clear.** `GET /api/corpus` reports the loaded sources with per-source
+  chunk counts and totals (surfaced in the UI header + "Manage documents" panel); `DELETE
+  /api/corpus` ("Clear all") empties the store without uploading a replacement.
+
+**Known limitation — single-session, shared store.** Replace-on-upload is a single-session,
+local-demo model: the store is one global corpus. Concurrent users would share and clobber it
+(one user's upload wipes another's). This is intentional scope, not an oversight. The next step
+for true multi-user concurrency is **per-session isolation** — a session ID scoping ingestion,
+retrieval, and clear (e.g. a `session_id` column on `documents`/`chunks` and a matching filter in
+retrieval) so concurrent users don't share a corpus. Not implemented here by design.
+
 ## Query pipeline — the layered relevance guardrail
 ```
 embed query -> top-k cosine retrieval
