@@ -1,5 +1,8 @@
 # Document Q&A Copilot — Agentic RAG
 
+<!-- Swap OWNER/REPO for your GitHub slug once you add the remote. -->
+![CI](https://github.com/OWNER/REPO/actions/workflows/ci.yml/badge.svg)
+
 Ask questions against your own documents and get grounded answers with the exact excerpts
 they came from — or an honest *"I don't have information on that in the loaded documents."*
 The system answers **only** from whatever documents are currently loaded.
@@ -9,6 +12,31 @@ The system answers **only** from whatever documents are currently loaded.
 > generation → groundedness verify), wrapped in an **LLM-driven query-reformulation loop** (with
 > scope-drift guard and same-chunks early-termination) and a lightweight answer-shape decision.
 > Returns answer + citations, or an honest refusal. See [ARCHITECTURE.md](ARCHITECTURE.md).
+
+## Run with Docker (one command)
+Brings up Postgres/pgvector + backend + frontend together.
+
+**Requires:** Docker + Docker Compose, and a Mistral API key.
+```bash
+# 1. put your key in .env (git-ignored) — injected at run time, never baked into an image
+echo 'MISTRAL_API_KEY=your-mistral-key' >> .env
+# 2. build + start everything
+docker compose up --build
+```
+Then open **http://localhost:5173** (frontend). Backend is on `:8080`, Postgres on `:5432`. The
+backend waits for Postgres to be healthy; Flyway creates the pgvector schema on first start. The
+frontend (nginx) reverse-proxies `/api/*` to the backend, so there's no CORS. Ingest a document
+from the UI's "Manage documents" panel, then ask.
+
+> `docker compose up` fails fast if `MISTRAL_API_KEY` isn't set. The key is read from `.env`/host
+> env at run time only — never written into a Dockerfile, image layer, the compose file, or CI.
+
+Stop with `docker compose down` (add `-v` to also drop the database volume).
+
+---
+
+The sections below are the **manual / dev** path (backend on the host + Vite dev server) — handy
+for a fast edit loop; the Docker path above is the one-command alternative.
 
 ## Stack
 - **Backend:** Spring Boot 3.3, Java 21

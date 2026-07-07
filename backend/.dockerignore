@@ -1,0 +1,7 @@
+# Keep the build context lean and guarantee secrets/local build output never enter an image layer.
+target/
+.env
+.env.*
+*.iml
+.idea/
+.git/

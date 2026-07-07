@@ -1,8 +1,9 @@
-# Milestone 1: brings up Postgres + pgvector locally.
-# The Spring Boot app runs on the host for now (fast dev loop on a low-end laptop);
-# a full app container + one-command bring-up lands in a later milestone.
+# One-command bring-up: Postgres/pgvector + backend (Spring Boot) + frontend (nginx).
 #
-#   docker compose up -d db
+#   MISTRAL_API_KEY must be set (in .env or the host env); it is injected at run time only —
+#   never baked into an image or committed.
+#
+#   docker compose up --build      # then open http://localhost:5173
 #
 services:
   db:
@@ -21,6 +22,35 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+
+  backend:
+    build: ./backend
+    container_name: rag-backend
+    environment:
+      DB_HOST: db
+      POSTGRES_PORT: 5432        # internal port on the compose network (fixed, not the host mapping)
+      POSTGRES_DB: ${POSTGRES_DB:-ragdb}
+      POSTGRES_USER: ${POSTGRES_USER:-rag}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-rag_local_pw}
+      # Cap the JVM heap so the backend fits a low-RAM laptop (default would grab ~1/4 of host RAM).
+      # Override via JAVA_HEAP in .env if you have more headroom.
+      JAVA_TOOL_OPTIONS: "-Xmx${JAVA_HEAP:-512m}"
+      # Secret injected from .env / host env at run time. NEVER baked into the image or committed.
+      # The ':?' makes `docker compose up` fail fast with this message if the key is unset.
+      MISTRAL_API_KEY: ${MISTRAL_API_KEY:?set MISTRAL_API_KEY in .env before running}
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+
+  frontend:
+    build: ./frontend
+    container_name: rag-frontend
+    depends_on:
+      - backend
+    ports:
+      - "5173:80"
 
 volumes:
   pgdata:
