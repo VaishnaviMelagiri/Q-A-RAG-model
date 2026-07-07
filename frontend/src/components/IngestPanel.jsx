@@ -40,8 +40,13 @@ export default function IngestPanel({ corpus, onChange }) {
     const r = await clearCorpus();
     setBusy(false);
     setAction(null);
-    if (r.kind === 'ok') await onChange();
-    else setError(r.message);
+    if (r.kind === 'ok') {
+      // The DELETE response is the full corpus shape ({documents:0,...}); apply it directly so the
+      // header, source list, empty-state guidance, and disabled ask box all update immediately.
+      await onChange(r.data);
+    } else {
+      setError(r.message);
+    }
   }
 
   const sources = corpus?.sources || [];

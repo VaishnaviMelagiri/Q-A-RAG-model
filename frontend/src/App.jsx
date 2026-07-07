@@ -17,8 +17,15 @@ export default function App() {
   const [corpusError, setCorpusError] = useState(false); // true if we can't reach the backend
   const endRef = useRef(null);
 
-  // Keep the header's "what's loaded" indicator current after ingest/clear.
-  const refreshCorpus = useCallback(async () => {
+  // Keep the header's "what's loaded" indicator current after ingest/clear. Pass a known corpus
+  // payload (e.g. the DELETE response, which is the full {documents,totalChunks,sources} shape) to
+  // apply it immediately; otherwise re-fetch from the backend (cache-busted in getCorpus).
+  const refreshCorpus = useCallback(async (known) => {
+    if (known) {
+      setCorpus(known);
+      setCorpusError(false);
+      return;
+    }
     const r = await getCorpus();
     if (r.kind === 'ok') {
       setCorpus(r.data);
@@ -68,7 +75,7 @@ export default function App() {
             <h2>Can't reach the server</h2>
             <p className="muted">
               Make sure the backend is running on port 8080, then{' '}
-              <button className="linkish" onClick={refreshCorpus}>retry</button>.
+              <button className="linkish" onClick={() => refreshCorpus()}>retry</button>.
             </p>
           </div>
         )}

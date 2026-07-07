@@ -35,7 +35,9 @@ export async function query(question) {
 /** GET /api/corpus — what's currently loaded. Returns { kind: 'ok', data } or { kind: 'error', message }. */
 export async function getCorpus() {
   try {
-    const res = await fetch('/api/corpus');
+    // no-store: this reflects mutable server state (ingest/clear change it), so never read a
+    // stale cached response — otherwise the UI shows old counts after a mutation.
+    const res = await fetch('/api/corpus', { cache: 'no-store' });
     const data = await res.json().catch(() => null);
     if (!res.ok) return { kind: 'error', message: data?.detail || `Failed to load corpus (HTTP ${res.status}).` };
     return { kind: 'ok', data };
