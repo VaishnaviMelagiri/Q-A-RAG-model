@@ -1,15 +1,24 @@
-// The honest-refusal state. Rendered calm and deliberate — NOT like an error/crash — because
-// "that's not in the loaded documents" is a correct, first-class outcome of the system.
+// The honest-refusal state. Leads with a plain-language message; the technical detail (judge's
+// reason, closest-match score, which stage stopped) is tucked behind a collapsed "Why?" expander
+// so it serves an end user by default but is one click away for a reviewer. Styled calm — NOT an
+// error/crash — because "not in the loaded documents" is a correct outcome.
 export default function RefusalNotice({ data }) {
+  const hasDetail = data.judgeReason || typeof data.bestScore === 'number' || data.refusedBy;
   return (
     <div className="refusal" role="note">
-      <div className="refusal-badge">not in the loaded documents</div>
       <p className="refusal-msg">{data.message}</p>
-      {data.judgeReason && <p className="refusal-why muted">Why: {data.judgeReason}</p>}
-      <div className="refusal-tags muted">
-        refused by <code>{data.refusedBy}</code>
-        {typeof data.bestScore === 'number' && <> · best match {data.bestScore.toFixed(3)}</>}
-      </div>
+      {hasDetail && (
+        <details className="disclosure">
+          <summary>Why?</summary>
+          <div className="disclosure-body muted">
+            {data.judgeReason && <p>{data.judgeReason}</p>}
+            <p>
+              {data.refusedBy && <>Stopped at the <code>{data.refusedBy}</code> stage</>}
+              {typeof data.bestScore === 'number' && <> · closest match {data.bestScore.toFixed(3)}</>}
+            </p>
+          </div>
+        </details>
+      )}
     </div>
   );
 }

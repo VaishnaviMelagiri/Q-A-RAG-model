@@ -38,14 +38,21 @@ function renderAnswer(answer, citations, onCite) {
   return parts;
 }
 
-function ReformulationBadge({ query }) {
+// Subtle "we refined your question" chip — not front and center. The actual reformulated query
+// is on hover (title) and one click away (expand), so it's discoverable but not noisy.
+function RefinedChip({ query }) {
   const [open, setOpen] = useState(false);
   return (
-    <div className="reform">
-      <button className="badge" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
-        ↻ reformulated {open ? '▾' : '▸'}
+    <div className="refined">
+      <button
+        className="refined-chip"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        title={query ? `Refined to: “${query}”` : undefined}
+      >
+        ✨ refined your question
       </button>
-      {open && <div className="reform-q">Re-queried as: <em>“{query}”</em></div>}
+      {open && query && <div className="refined-q muted">Refined to: <em>“{query}”</em></div>}
     </div>
   );
 }
@@ -54,7 +61,7 @@ export default function AssistantMessage({ data, onCite }) {
   const { answer, citations = [], rounds, reformulatedQuery, verified, unsupportedClaims = [] } = data;
   return (
     <div className="assistant">
-      {rounds > 0 && <ReformulationBadge query={reformulatedQuery} />}
+      {rounds > 0 && <RefinedChip query={reformulatedQuery} />}
       <div className="answer">{renderAnswer(answer || '', citations, onCite)}</div>
       <div className="answer-foot muted">
         {citations.length > 0 && (

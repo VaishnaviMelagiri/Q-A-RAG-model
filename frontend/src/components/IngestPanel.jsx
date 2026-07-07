@@ -8,16 +8,19 @@ export default function IngestPanel({ corpus, onChange }) {
   const [open, setOpen] = useState(false);
   const [files, setFiles] = useState([]);
   const [busy, setBusy] = useState(false);
+  const [action, setAction] = useState(null); // 'upload' | 'clear' — for accurate button labels
   const [lastIngest, setLastIngest] = useState(null); // details[] from the last upload
   const [error, setError] = useState(null);
 
   async function upload() {
     if (!files.length || busy) return;
     setBusy(true);
+    setAction('upload');
     setError(null);
     setLastIngest(null);
     const r = await ingest(files);
     setBusy(false);
+    setAction(null);
     if (r.kind === 'ok') {
       setLastIngest(r.data.details || []);
       setFiles([]);
@@ -31,10 +34,12 @@ export default function IngestPanel({ corpus, onChange }) {
     if (busy) return;
     if (!window.confirm('Remove ALL loaded documents and chunks? This cannot be undone.')) return;
     setBusy(true);
+    setAction('clear');
     setError(null);
     setLastIngest(null);
     const r = await clearCorpus();
     setBusy(false);
+    setAction(null);
     if (r.kind === 'ok') await onChange();
     else setError(r.message);
   }
@@ -75,10 +80,10 @@ export default function IngestPanel({ corpus, onChange }) {
               onChange={(e) => setFiles([...e.target.files])}
             />
             <button onClick={upload} disabled={busy || !files.length}>
-              {busy ? 'Working…' : 'Upload (replace)'}
+              {action === 'upload' ? 'Reading your document…' : 'Upload (replace)'}
             </button>
             <button className="btn-danger" onClick={clearAll} disabled={busy || sources.length === 0}>
-              Clear all
+              {action === 'clear' ? 'Clearing…' : 'Clear all'}
             </button>
           </div>
 

@@ -17,21 +17,34 @@ export default function Turn({ turn, onCite }) {
 
 function Loading() {
   return (
-    <div className="loading" aria-live="polite" aria-label="thinking">
+    <div className="loading" aria-live="polite" aria-label="Thinking">
       <span className="dot" />
       <span className="dot" />
       <span className="dot" />
-      <span className="muted"> thinking… (judge → generate → verify)</span>
+      <span className="loading-label">Thinking…</span>
+      <span className="loading-sub muted">judge → generate → verify</span>
     </div>
   );
 }
 
 function Response({ result, onCite }) {
   if (result.kind === 'rate_limited') {
-    return <div className="notice notice-busy">⏳ {result.message}</div>;
+    // Human-language, no HTTP codes surfaced.
+    return <div className="notice notice-busy">The service is busy right now — please try again in a moment.</div>;
   }
   if (result.kind === 'error') {
-    return <div className="notice notice-error">⚠ {result.message}</div>;
+    // Friendly lead; the raw detail (for a reviewer) is tucked behind an expander, not surfaced raw.
+    return (
+      <div className="notice notice-error">
+        <div>Something went wrong. Please try again.</div>
+        {result.message && (
+          <details className="disclosure">
+            <summary>Details</summary>
+            <span className="mono">{result.message}</span>
+          </details>
+        )}
+      </div>
+    );
   }
   // kind === 'response' — a real backend answer, which may itself be a refusal.
   const data = result.data;

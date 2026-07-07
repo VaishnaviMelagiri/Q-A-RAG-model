@@ -5,18 +5,27 @@ import Turn from './components/Turn.jsx';
 import CitationDrawer from './components/CitationDrawer.jsx';
 import IngestPanel from './components/IngestPanel.jsx';
 
+// Tappable starter questions once a document is loaded — reduces the blank-page problem.
+const SUGGESTIONS = ['Summarize this document', 'What are the key points?', 'What is this document about?'];
+
 // Conversation state lives in memory only (no localStorage/sessionStorage, per spec).
 export default function App() {
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(false);
   const [activeCitation, setActiveCitation] = useState(null);
   const [corpus, setCorpus] = useState(null); // { documents, totalChunks, sources } — what's loaded
+  const [corpusError, setCorpusError] = useState(false); // true if we can't reach the backend
   const endRef = useRef(null);
 
   // Keep the header's "what's loaded" indicator current after ingest/clear.
   const refreshCorpus = useCallback(async () => {
     const r = await getCorpus();
-    if (r.kind === 'ok') setCorpus(r.data);
+    if (r.kind === 'ok') {
+      setCorpus(r.data);
+      setCorpusError(false);
+    } else {
+      setCorpusError(true); // distinguishes "backend down" from "no docs loaded"
+    }
   }, []);
 
   useEffect(() => { refreshCorpus(); }, [refreshCorpus]);
@@ -24,6 +33,8 @@ export default function App() {
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  const noDocs = corpus && corpus.documents === 0;
 
   async function ask(question) {
     const id = (crypto.randomUUID && crypto.randomUUID()) || String(Date.now());
@@ -52,15 +63,37 @@ export default function App() {
       </header>
 
       <main className="chat">
-        {messages.length === 0 && (
-          <div className="empty muted">
-            <p>Ask a question about the loaded documents. Try:</p>
-            <ul>
-              <li><strong>“What is a deadlock?”</strong> → grounded answer with clickable citations</li>
-              <li><strong>“Tell me about RTOS”</strong> → shows the “↻ reformulated” agentic badge</li>
-              <li><strong>“What is the capital of France?”</strong> → honest refusal</li>
-            </ul>
+        {messages.length === 0 && corpusError && (
+          <div className="empty">
+            <h2>Can't reach the server</h2>
+            <p className="muted">
+              Make sure the backend is running on port 8080, then{' '}
+              <button className="linkish" onClick={refreshCorpus}>retry</button>.
+            </p>
           </div>
+        )}
+        {messages.length === 0 && !corpusError && corpus && (
+          noDocs ? (
+            <div className="empty">
+              <h2>Upload a document to get started</h2>
+              <p className="muted">
+                Open <strong>“Manage documents”</strong> above and upload a PDF, Markdown, text, or
+                HTML file. Then ask questions about it — you'll get answers grounded in that document,
+                with citations you can click.
+              </p>
+            </div>
+          ) : (
+            <div className="empty">
+              <p className="muted">Ask anything about the loaded document{corpus.documents > 1 ? 's' : ''}. For example:</p>
+              <div className="suggestions">
+                {SUGGESTIONS.map((q) => (
+                  <button key={q} className="suggestion" onClick={() => ask(q)} disabled={loading}>
+                    {q}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )
         )}
         {messages.map((t) => (
           <Turn key={t.id} turn={t} onCite={setActiveCitation} />
@@ -69,7 +102,15 @@ export default function App() {
       </main>
 
       <footer className="footer">
-        <ChatInput onSend={ask} disabled={loading} />
+        <ChatInput
+          onSend={ask}
+          disabled={loading || corpusError || noDocs || !corpus}
+          placeholder={
+            corpusError ? 'Server unavailable — start the backend…'
+              : noDocs ? 'Upload a document to start asking…'
+              : undefined
+          }
+        />
       </footer>
 
       <CitationDrawer citation={activeCitation} onClose={() => setActiveCitation(null)} />
