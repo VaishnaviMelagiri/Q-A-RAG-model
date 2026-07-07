@@ -229,3 +229,34 @@ The agentic loop is proven two ways:
    total) is what makes "RTOS" a reliable rescue. On a 31-chunk corpus, top-k=5 retrieval was too
    forgiving for the loop to fire consistently. Off-topic queries (e.g. *"capital of France"*) still
    **fail safe to refusal** at the judge layer regardless of corpus size.
+
+## Frontend (chat UI)
+A small React + Vite app (`frontend/`, plain CSS, no UI framework, no storage) makes the
+distinctive behavior visible rather than buried in JSON, following a **progressive-disclosure**
+principle — clean for an end user, with the technical detail one click away for a reviewer:
+- **Citations** render as clickable `[S#]` chips → a side drawer with the source excerpt, document,
+  chunk index, and similarity (citation integrity, made visible).
+- **Refusal** leads with the plain message; the judge's reason, closest-match score, and refusing
+  stage sit behind a "Why?" expander. Styled as a calm, correct outcome — not an error.
+- **Agentic loop** surfaces as a subtle "refined your question" chip revealing the reformulated query.
+- **Human-language states** for ingest/query/rate-limit; the `judge → generate → verify` pipeline is
+  muted subtext. Distinct empty states: "upload to get started" (disabled ask box) vs. "can't reach
+  the server" (retry).
+- **Corpus visibility**: header shows "Loaded: N docs · M chunks"; the "Manage documents" panel lists
+  each source's chunk count, uploads (replace-on-upload), and clears. Corpus-mutating actions update
+  the view immediately (clear applies the DELETE response; refetches are `no-store`).
+
+## Build, run & CI
+- **One-command run.** `docker compose up` builds and starts **db + backend + frontend**. The backend
+  waits for Postgres health; Flyway creates the pgvector schema on first start. The frontend (nginx)
+  serves the static Vite build and reverse-proxies `/api → backend:8080`, so the browser is
+  same-origin (no CORS) — the production equivalent of the Vite dev proxy.
+- **Images.** Backend is a multi-stage build (Maven on `temurin-21` → slim `21-jre`, non-root); tests
+  are skipped in the image build because **CI is the test gate**. Frontend is Vite build → nginx.
+- **Secrets.** `MISTRAL_API_KEY` is injected only as a **runtime** env var from `.env`/host env
+  (compose `${MISTRAL_API_KEY:?…}` fails fast if unset). It is never a build arg, never in an image
+  layer, never committed; `.dockerignore` keeps `.env` out of build contexts. *Tradeoff:* on a
+  low-RAM host the JVM heap is capped (`-Xmx${JAVA_HEAP:-512m}`) so the stack fits.
+- **CI (GitHub Actions).** On push/PR to `main`, two parallel jobs: backend `mvnw test` (the 26 unit
+  tests) and frontend `npm ci && npm run build`. The tests are deliberately **DB-free** (plain unit
+  tests, no Spring context), so CI needs no services and no secrets — fast and green.
