@@ -1,7 +1,6 @@
 # Document Q&A Copilot — Agentic RAG
 
-<!-- Swap OWNER/REPO for your GitHub slug once you add the remote. -->
-![CI](https://github.com/OWNER/REPO/actions/workflows/ci.yml/badge.svg)
+![CI](https://github.com/VaishnaviMelagiri/Q-A-RAG-model/actions/workflows/ci.yml/badge.svg)
 
 Ask questions against your own documents and get grounded answers with the exact excerpts
 they came from — or an honest *"I don't have information on that in the loaded documents."*
