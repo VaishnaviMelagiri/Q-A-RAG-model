@@ -1,6 +1,7 @@
 package com.qacopilot.retrieval;
 
 import com.qacopilot.ingest.Chunk;
+import com.qacopilot.ingest.PreparedDocument;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
@@ -117,6 +118,24 @@ public class ChunkStore {
     @Transactional
     public void clearAll() {
         jdbc.getJdbcTemplate().execute("TRUNCATE documents RESTART IDENTITY CASCADE");
+    }
+
+    /**
+     * Atomically replace the entire corpus: clear it, then insert every prepared document and its
+     * chunks — all in ONE transaction. If any insert fails, the whole thing (including the clear)
+     * rolls back, so the previously-loaded corpus survives intact. Documents with no chunks are
+     * skipped (no {@code documents} row), matching the "empty file contributes nothing" behavior.
+     */
+    @Transactional
+    public void replaceAll(List<PreparedDocument> docs) {
+        jdbc.getJdbcTemplate().execute("TRUNCATE documents RESTART IDENTITY CASCADE");
+        for (PreparedDocument doc : docs) {
+            if (doc.chunks().isEmpty()) {
+                continue;
+            }
+            long documentId = insertDocument(doc.sourceName(), doc.sourceType());
+            insertChunks(documentId, doc.chunks(), doc.embeddings());
+        }
     }
 
     /**

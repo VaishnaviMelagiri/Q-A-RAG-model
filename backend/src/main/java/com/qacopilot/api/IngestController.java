@@ -3,6 +3,7 @@ package com.qacopilot.api;
 import com.qacopilot.config.RagProperties;
 import com.qacopilot.ingest.IngestionService;
 import com.qacopilot.ingest.IngestionService.IngestResult;
+import com.qacopilot.ingest.IngestionService.SourceFile;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -56,13 +57,14 @@ public class IngestController {
                         + " bytes, over the " + maxBytes + "-byte per-file limit (rag.ingest.max-file-bytes).");
             }
         }
-        // Replace-on-upload: wipe the current set first so this upload stands alone. Done AFTER the
-        // guards so a bad request never clears an existing corpus.
-        ingestion.clearCorpus();
-        List<IngestResult> results = new ArrayList<>();
+        // Read every file's bytes, then hand off to atomic ingest: it prepares (load/chunk/embed)
+        // all files in memory and only then replaces the corpus in one transaction — so a failure
+        // mid-batch (or during embedding) never leaves a partial/empty corpus behind.
+        List<SourceFile> sources = new ArrayList<>(files.size());
         for (MultipartFile file : files) {
-            results.add(ingestion.ingest(file.getOriginalFilename(), file.getBytes()));
+            sources.add(new SourceFile(file.getOriginalFilename(), file.getBytes()));
         }
+        List<IngestResult> results = ingestion.ingestAll(sources);
         int totalChunks = results.stream().mapToInt(IngestResult::chunksIngested).sum();
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(new IngestResponse(results.size(), totalChunks, results));
