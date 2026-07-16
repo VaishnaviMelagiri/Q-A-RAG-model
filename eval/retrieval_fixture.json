@@ -1,15 +1,22 @@
 [
   {
-    "question": "REPLACE_ME: a real question you would actually ask about the loaded documents",
+    "question": "REPLACE_ME: an in-corpus question you would actually ask about the loaded documents",
     "expectSnippets": [
       "REPLACE_ME: a distinctive phrase that MUST appear verbatim in a correct chunk"
     ],
-    "expectSource": "OS.pdf"
+    "expectSource": "OS.pdf",
+    "expectRefusal": false
   },
   {
-    "question": "REPLACE_ME: another real question (expectSource is optional; drop it if not useful)",
+    "question": "REPLACE_ME: another in-corpus question (expectSource is optional; drop it if not useful)",
     "expectSnippets": [
       "REPLACE_ME: another distinctive phrase from the source text"
-    ]
+    ],
+    "expectRefusal": false
+  },
+  {
+    "question": "REPLACE_ME: an OUT-OF-CORPUS question whose answer is deliberately NOT in the documents",
+    "expectSnippets": [],
+    "expectRefusal": true
   }
 ]

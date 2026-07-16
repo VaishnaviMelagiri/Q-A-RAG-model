@@ -6,6 +6,7 @@ import com.qacopilot.retrieval.ScoredChunk;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -19,8 +20,17 @@ final class EvalSupport {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
-    /** One hand-authored fixture item. {@code expectSource} is optional (may be null/blank). */
-    record FixtureItem(String question, List<String> expectSnippets, String expectSource) {}
+    /**
+     * One hand-authored fixture item. {@code expectSource} is optional (may be null/blank).
+     * {@code expectRefusal} labels out-of-corpus questions (answer deliberately NOT in the docs);
+     * absent/null means in-corpus (answerable).
+     */
+    record FixtureItem(String question, List<String> expectSnippets, String expectSource,
+                       Boolean expectRefusal) {
+        boolean expectsRefusal() {
+            return Boolean.TRUE.equals(expectRefusal);
+        }
+    }
 
     /** Resolve the eval/ folder (default {@code ../eval} relative to the backend module dir). */
     static Path evalDir() {
@@ -95,5 +105,94 @@ final class EvalSupport {
 
     static double toMillis(long nanos) {
         return nanos / 1_000_000.0;
+    }
+
+    /** Nearest-rank percentile over a double sample; 0 for empty input. */
+    static double percentile(double[] samples, double p) {
+        if (samples.length == 0) {
+            return 0;
+        }
+        double[] sorted = samples.clone();
+        java.util.Arrays.sort(sorted);
+        int idx = (int) Math.ceil(p / 100.0 * sorted.length) - 1;
+        idx = Math.max(0, Math.min(sorted.length - 1, idx));
+        return sorted[idx];
+    }
+
+    static double mean(double[] samples) {
+        if (samples.length == 0) {
+            return 0;
+        }
+        double sum = 0;
+        for (double v : samples) {
+            sum += v;
+        }
+        return sum / samples.length;
+    }
+
+    /** Word set (lowercased, alphanumeric tokens) for overlap/Jaccard measures. */
+    static java.util.Set<String> tokens(String s) {
+        java.util.Set<String> set = new java.util.HashSet<>();
+        for (String tok : normalize(s).split("[^a-z0-9]+")) {
+            if (tok.length() > 2) { // ignore very short tokens/stopword-ish noise
+                set.add(tok);
+            }
+        }
+        return set;
+    }
+
+    /** Jaccard overlap of two token sets in [0,1]; 0 if either is empty. */
+    static double jaccard(java.util.Set<String> a, java.util.Set<String> b) {
+        if (a.isEmpty() || b.isEmpty()) {
+            return 0;
+        }
+        java.util.Set<String> inter = new java.util.HashSet<>(a);
+        inter.retainAll(b);
+        int union = a.size() + b.size() - inter.size();
+        return union == 0 ? 0 : inter.size() / (double) union;
+    }
+
+    /**
+     * Fraction of {@code b} covered by {@code a} (|a∩b|/|b|) — asymmetric containment, used to ask
+     * "is this sentence's content supported by that chunk". 0 if {@code b} is empty.
+     */
+    static double coverage(java.util.Set<String> source, java.util.Set<String> target) {
+        if (target.isEmpty()) {
+            return 0;
+        }
+        java.util.Set<String> inter = new java.util.HashSet<>(source);
+        inter.retainAll(target);
+        return inter.size() / (double) target.size();
+    }
+
+    /** NDCG@k for a binary-relevance ranking; 0 if nothing relevant. */
+    static double ndcg(boolean[] relevant) {
+        double dcg = 0;
+        int relevantCount = 0;
+        for (int i = 0; i < relevant.length; i++) {
+            if (relevant[i]) {
+                dcg += 1.0 / (Math.log(i + 2) / Math.log(2)); // rank i+1 -> log2(rank+1)
+                relevantCount++;
+            }
+        }
+        double idcg = 0;
+        for (int i = 0; i < relevantCount; i++) {
+            idcg += 1.0 / (Math.log(i + 2) / Math.log(2));
+        }
+        return idcg == 0 ? 0 : dcg / idcg;
+    }
+
+    /** Split answer text into sentences (naive, punctuation-based) for per-claim citation checks. */
+    static List<String> sentences(String text) {
+        List<String> out = new ArrayList<>();
+        if (text == null) {
+            return out;
+        }
+        for (String s : text.split("(?<=[.!?])\\s+")) {
+            if (!s.isBlank()) {
+                out.add(s.strip());
+            }
+        }
+        return out;
     }
 }
