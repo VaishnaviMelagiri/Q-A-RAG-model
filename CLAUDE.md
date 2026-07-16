@@ -108,6 +108,11 @@ Keep each stage a separate, testable component behind a clean interface.
 - After each milestone, tell me what to test manually and what the next step is.
 - Ask me for the real corpus (and later, real eval questions) and WAIT — never fabricate.
 
+## ATTRIBUTION
+Commit messages, PR descriptions, and code comments must never include AI/tool attribution,
+co-author trailers, "Generated with" lines, or references to Claude/Claude Code. Write commits as
+the human author only.
+
 ## FIRST STEP (do NOT write code yet)
 Propose:
   (a) folder structure,
