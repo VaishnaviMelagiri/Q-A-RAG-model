@@ -1,0 +1,15 @@
+[
+  {
+    "question": "REPLACE_ME: a real question you would actually ask about the loaded documents",
+    "expectSnippets": [
+      "REPLACE_ME: a distinctive phrase that MUST appear verbatim in a correct chunk"
+    ],
+    "expectSource": "OS.pdf"
+  },
+  {
+    "question": "REPLACE_ME: another real question (expectSource is optional; drop it if not useful)",
+    "expectSnippets": [
+      "REPLACE_ME: another distinctive phrase from the source text"
+    ]
+  }
+]

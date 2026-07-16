@@ -54,6 +54,25 @@ public class QueryService {
     }
 
     public AnswerResult answer(String question) {
+        // Product path: stage timings are captured into a throwaway accumulator and discarded, so
+        // behavior is byte-identical to before. The eval harness calls answerTimed(...) to read them.
+        return runPipeline(question, new Timings(), false);
+    }
+
+    /**
+     * Benchmark/eval-only variant of {@link #answer(String)} that also returns per-stage timings.
+     * Behavior is identical to {@code answer} — it only measures — and it is NOT used by the API or
+     * any product code path. The timed path splits embed vs. vector-search via
+     * {@link RetrievalService#retrieveTimed}; the product path keeps using {@code retrieve()}.
+     */
+    public TimedAnswer answerTimed(String question) {
+        Timings t = new Timings();
+        long start = System.nanoTime();
+        AnswerResult result = runPipeline(question, t, true);
+        return new TimedAnswer(result, t.snapshot(System.nanoTime() - start));
+    }
+
+    private AnswerResult runPipeline(String question, Timings t, boolean timed) {
         int maxReformulations = Math.max(0, props.getAgent().getMaxReformulations());
         double threshold = props.getGate().getSimilarityThreshold();
 
@@ -63,7 +82,15 @@ public class QueryService {
         int round = 0;
 
         while (true) {
-            List<ScoredChunk> candidates = retrieval.retrieve(currentQuery);
+            List<ScoredChunk> candidates;
+            if (timed) {
+                RetrievalService.TimedRetrieval tr = retrieval.retrieveTimed(currentQuery);
+                t.embedNanos += tr.embedNanos();
+                t.retrieveNanos += tr.searchNanos();
+                candidates = tr.chunks();
+            } else {
+                candidates = retrieval.retrieve(currentQuery);
+            }
             List<Long> chunkIds = candidates.stream().map(ScoredChunk::chunkId).toList();
             double bestScore = candidates.isEmpty()
                     ? Double.NEGATIVE_INFINITY : candidates.get(0).similarity();
@@ -71,6 +98,7 @@ public class QueryService {
             // Early termination: a reformulation that surfaces the exact same passages can't help.
             if (previousChunkIds != null && chunkIds.equals(previousChunkIds)) {
                 log.info("Early termination at round {}: reformulation returned the same passages", round);
+                t.rounds = round;
                 return AnswerResult.refused("judge", REFUSAL,
                         "Reformulation retrieved the same passages, which were insufficient.",
                         bestScore, threshold, candidates, List.of(), round, reformulatedQuery);
@@ -83,11 +111,17 @@ public class QueryService {
 
             if (pre.passed()) {
                 // Layer 2: judge ALWAYS evaluates the original question (intent preservation).
+                long js = System.nanoTime();
                 RelevanceJudge.Verdict verdict = judge.judge(question, candidates);
+                t.judgeNanos += System.nanoTime() - js;
                 judgeReason = verdict.reason();
                 if (verdict.sufficient()) {
+                    long gs = System.nanoTime();
                     AnswerGenerator.Draft draft = generator.generate(question, candidates);
+                    t.generateNanos += System.nanoTime() - gs;
+                    long vs = System.nanoTime();
                     GroundednessVerifier.Result v = verifier.verify(draft.answer(), candidates);
+                    t.verifyNanos += System.nanoTime() - vs;
                     if (!v.answer().isBlank()) {
                         // Citation-integrity guard: strip any [n] that doesn't map to a retrieved
                         // passage (e.g. an in-text list number echoed as a citation).
@@ -100,6 +134,7 @@ public class QueryService {
                             log.warn("Answer has no valid citation after sanitizing at round {} "
                                     + "(grounding still enforced by verify)", round);
                         }
+                        t.rounds = round;
                         return AnswerResult.answered(cg.answer(), judgeReason, bestScore, threshold,
                                 candidates, v.unsupportedClaims(), v.verified(),
                                 round, reformulatedQuery, draft.shape());
@@ -115,13 +150,17 @@ public class QueryService {
 
             // No answer this round. Reformulate if budget remains, else refuse.
             if (round >= maxReformulations) {
+                t.rounds = round;
                 return AnswerResult.refused(blockedBy, REFUSAL, judgeReason,
                         bestScore, threshold, candidates, unsupported, round, reformulatedQuery);
             }
 
+            long rs = System.nanoTime();
             QueryReformulator.Outcome outcome = reformulator.reformulate(question, candidates);
+            t.reformulateNanos += System.nanoTime() - rs;
             if (!outcome.reformulated()) {
                 log.info("Not reformulating ({}); refusing at round {}", outcome.reason(), round);
+                t.rounds = round;
                 return AnswerResult.refused(blockedBy, REFUSAL, judgeReason,
                         bestScore, threshold, candidates, unsupported, round, reformulatedQuery);
             }
@@ -132,4 +171,26 @@ public class QueryService {
             round++;
         }
     }
+
+    /** Mutable per-query stage-time accumulator (nanoseconds). Eval-only; product path discards it. */
+    private static final class Timings {
+        long embedNanos, retrieveNanos, judgeNanos, generateNanos, verifyNanos, reformulateNanos;
+        int rounds;
+
+        StageTimings snapshot(long totalNanos) {
+            return new StageTimings(embedNanos, retrieveNanos, judgeNanos, generateNanos,
+                    verifyNanos, reformulateNanos, rounds, totalNanos);
+        }
+    }
+
+    /**
+     * Per-stage wall-clock timings for a single query, in nanoseconds. Stage values are summed
+     * across reformulation rounds; {@code totalNanos} is end-to-end. Reporting/eval only.
+     */
+    public record StageTimings(long embedNanos, long retrieveNanos, long judgeNanos,
+                               long generateNanos, long verifyNanos, long reformulateNanos,
+                               int rounds, long totalNanos) {}
+
+    /** An {@link AnswerResult} plus how long each stage took. Benchmark/eval only. */
+    public record TimedAnswer(AnswerResult result, StageTimings timings) {}
 }
