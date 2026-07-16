@@ -72,14 +72,14 @@ Do not build the agentic layer until the RAG core (ingest -> retrieve -> grounde
 - Backend: **Spring Boot, Java 21** (REST API).
 - Vector store: **PostgreSQL + pgvector**.
 - Frontend: **React** (chat UI showing answer + citations).
-- LLM + embeddings: **a free hosted API** (low-end laptop can't run local models). Default:
-  **Google Gemini API** — `text-embedding-004` (768-dim) for embeddings and `gemini-2.0-flash`
-  for generation, both on the free tier, one key for both. Keep everything PROVIDER-AGNOSTIC
-  behind an interface so I can switch providers (Groq, Cohere, Ollama, etc.) without touching
-  business logic. The API key is a secret: read it from an environment variable, NEVER commit it.
-  The embedding dimension is fixed by the chosen embedding provider (768 for text-embedding-004)
-  and baked into the DB schema — changing embedding providers later means a schema migration + a
-  full re-embed.
+- LLM + embeddings: **a free hosted API** (low-end laptop can't run local models). Active:
+  **Mistral API** — `mistral-embed` (1024-dim) for embeddings and `mistral-small-latest`
+  (configurable) for generation, both on the free tier, one key for both. Keep everything
+  PROVIDER-AGNOSTIC behind an interface so I can switch providers (Groq, Cohere, Ollama, etc.)
+  without touching business logic. The API key is a secret: read it from an environment
+  variable, NEVER commit it. The embedding dimension is fixed by the chosen embedding provider
+  (1024 for `mistral-embed`) and baked into the DB schema — changing embedding providers later
+  means a schema migration + a full re-embed.
 - Containerization: **Docker + docker-compose** (app + Postgres/pgvector, one command up).
 - CI: **GitHub Actions** (build + run tests on push).
 

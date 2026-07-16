@@ -13,11 +13,14 @@ import java.util.Locale;
 
 /**
  * Source-agnostic loader: turns raw bytes of any supported document into plain text.
- * Type is detected from the filename extension. Markdown and plain text are kept as-is;
- * PDF and HTML are extracted to readable text. Unknown extensions are treated as UTF-8 text.
+ * Type is detected from the filename extension against a fixed allow-list — pdf, html/htm,
+ * md/markdown, txt. Markdown and plain text are kept as-is; PDF and HTML are extracted to
+ * readable text. Any other extension is rejected with an {@link IllegalArgumentException}
+ * (surfaced as HTTP 400) rather than blindly decoded as UTF-8 — binary blobs (e.g. .docx,
+ * .png) would otherwise produce garbage "text" and pollute the corpus.
  *
  * <p>This is deliberately corpus-agnostic — it accepts whatever real documents the user
- * provides and never fabricates or supplements content.
+ * provides in a supported format and never fabricates or supplements content.
  */
 @Component
 public class DocumentLoader {
@@ -34,8 +37,12 @@ public class DocumentLoader {
         if (lower.endsWith(".md") || lower.endsWith(".markdown")) {
             return new RawDoc(filename, "markdown", new String(bytes, StandardCharsets.UTF_8));
         }
-        // .txt and everything else: treat as UTF-8 text.
-        return new RawDoc(filename, "text", new String(bytes, StandardCharsets.UTF_8));
+        if (lower.endsWith(".txt")) {
+            return new RawDoc(filename, "text", new String(bytes, StandardCharsets.UTF_8));
+        }
+        throw new IllegalArgumentException(
+                "Unsupported file type: '" + (filename == null ? "(no name)" : filename)
+                + "'. Supported types are: pdf, html/htm, md/markdown, txt.");
     }
 
     private String extractPdf(byte[] bytes) {

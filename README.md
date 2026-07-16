@@ -42,8 +42,8 @@ for a fast edit loop; the Docker path above is the one-command alternative.
 - **Vector store:** PostgreSQL + pgvector (Docker)
 - **Embeddings / LLM:** Mistral API — `mistral-embed` (**1024-dim**) for embeddings and
   `mistral-small-latest` (configurable) for generation. Behind provider-agnostic interfaces
-  (`EmbeddingClient`, `LlmClient`); switch providers with `rag.embedding.provider` /
-  `rag.llm.provider` (a Gemini embedding impl is also included).
+  (`EmbeddingClient`, `LlmClient`); a different provider can be added as a new impl selected via
+  `rag.embedding.provider` / `rag.llm.provider`.
 
 ## Prerequisites
 - Docker + Docker Compose
@@ -152,7 +152,7 @@ If you swap the embedding model or corpus, re-run this and re-tune — the numbe
 ```
 backend/src/main/java/com/qacopilot/
   ingest/     DocumentLoader, Chunker, IngestionService   (load → chunk → embed → store)
-  embedding/  EmbeddingClient (interface) + MistralEmbeddingClient (+ GeminiEmbeddingClient)
+  embedding/  EmbeddingClient (interface) + MistralEmbeddingClient
   llm/        LlmClient (interface) + MistralLlmClient
   retrieval/  ChunkStore (pgvector SQL), RetrievalService, ScoredChunk
   gate/       RelevanceGate                                (honest-refusal threshold)

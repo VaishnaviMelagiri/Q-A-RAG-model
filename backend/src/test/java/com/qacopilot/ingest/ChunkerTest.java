@@ -3,7 +3,9 @@ package com.qacopilot.ingest;
 import com.qacopilot.config.RagProperties;
 import org.junit.jupiter.api.Test;
 
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -11,8 +13,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Chunker is pure logic (no DB, no network), so it's unit-testable in isolation.
- * These tests assert the two properties that matter for citations and retrieval:
- * offsets are exact, and chunks overlap.
+ * These tests pin the properties that matter for citations and retrieval: offsets bound the
+ * stored content exactly, chunks overlap, coverage is complete, and the window makes strict
+ * forward progress (no degenerate 1-char-shifted fragments).
  */
 class ChunkerTest {
 
@@ -42,9 +45,8 @@ class ChunkerTest {
         List<Chunk> chunks = chunker.chunk(text);
         assertFalse(chunks.isEmpty());
         for (Chunk c : chunks) {
-            // The stored content must equal the source sliced at its recorded offsets (modulo strip()).
-            String raw = text.substring(c.startOffset(), c.endOffset());
-            assertEquals(raw.strip(), c.content());
+            // Offsets bound the stored content EXACTLY (not merely modulo strip()).
+            assertEquals(text.substring(c.startOffset(), c.endOffset()), c.content());
         }
     }
 
@@ -60,6 +62,56 @@ class ChunkerTest {
         for (int i = 1; i < chunks.size(); i++) {
             assertTrue(chunks.get(i).startOffset() < chunks.get(i - 1).endOffset(),
                     "chunk " + i + " should start before previous chunk ends (overlap)");
+        }
+    }
+
+    @Test
+    void noDegenerateFragmentation_regression() {
+        // Previously this exact config crawled forward 1 char at a time and emitted 9 chunks,
+        // five of them 1-char-shifted tails of the same word. It must now be a handful of clean,
+        // non-duplicated chunks with strictly increasing offsets.
+        Chunker chunker = chunkerWith(40, 15, 10);
+        String text = "First section heading.\n\n\n\n"
+                + "Second section body text goes on for a while here indeed.";
+        List<Chunk> chunks = chunker.chunk(text);
+
+        assertFalse(chunks.isEmpty());
+        assertTrue(chunks.size() <= 4, "expected a small chunk count, got " + chunks.size());
+
+        Set<Integer> ends = new HashSet<>();
+        for (Chunk c : chunks) {
+            assertTrue(ends.add(c.endOffset()), "duplicate endOffset " + c.endOffset());
+        }
+        for (int i = 1; i < chunks.size(); i++) {
+            assertTrue(chunks.get(i).startOffset() > chunks.get(i - 1).startOffset(),
+                    "startOffset must strictly increase (chunk " + i + ")");
+            assertTrue(chunks.get(i).endOffset() > chunks.get(i - 1).endOffset(),
+                    "endOffset must strictly increase (chunk " + i + ")");
+        }
+        // And offsets still bound content exactly.
+        for (Chunk c : chunks) {
+            assertEquals(text.substring(c.startOffset(), c.endOffset()), c.content());
+        }
+    }
+
+    @Test
+    void everyNonWhitespaceCharacterIsCovered() {
+        Chunker chunker = chunkerWith(40, 15, 10);
+        String text = "First section heading.\n\n\n\n"
+                + "Second section body text goes on for a while here indeed.";
+        List<Chunk> chunks = chunker.chunk(text);
+
+        boolean[] covered = new boolean[text.length()];
+        for (Chunk c : chunks) {
+            for (int i = c.startOffset(); i < c.endOffset(); i++) {
+                covered[i] = true;
+            }
+        }
+        for (int i = 0; i < text.length(); i++) {
+            if (!Character.isWhitespace(text.charAt(i))) {
+                assertTrue(covered[i], "non-whitespace index " + i + " ('" + text.charAt(i)
+                        + "') is not covered by any chunk");
+            }
         }
     }
 }

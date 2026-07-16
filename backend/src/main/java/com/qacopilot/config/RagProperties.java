@@ -19,7 +19,7 @@ public class RagProperties {
     @NestedConfigurationProperty
     private Mistral mistral = new Mistral();
     @NestedConfigurationProperty
-    private Gemini gemini = new Gemini();
+    private Ingest ingest = new Ingest();
     @NestedConfigurationProperty
     private Chunking chunking = new Chunking();
     @NestedConfigurationProperty
@@ -28,6 +28,8 @@ public class RagProperties {
     private Gate gate = new Gate();
     @NestedConfigurationProperty
     private Agent agent = new Agent();
+    @NestedConfigurationProperty
+    private Http http = new Http();
 
     public Embedding getEmbedding() { return embedding; }
     public void setEmbedding(Embedding embedding) { this.embedding = embedding; }
@@ -35,8 +37,8 @@ public class RagProperties {
     public void setLlm(Llm llm) { this.llm = llm; }
     public Mistral getMistral() { return mistral; }
     public void setMistral(Mistral mistral) { this.mistral = mistral; }
-    public Gemini getGemini() { return gemini; }
-    public void setGemini(Gemini gemini) { this.gemini = gemini; }
+    public Ingest getIngest() { return ingest; }
+    public void setIngest(Ingest ingest) { this.ingest = ingest; }
     public Chunking getChunking() { return chunking; }
     public void setChunking(Chunking chunking) { this.chunking = chunking; }
     public Retrieval getRetrieval() { return retrieval; }
@@ -45,6 +47,8 @@ public class RagProperties {
     public void setGate(Gate gate) { this.gate = gate; }
     public Agent getAgent() { return agent; }
     public void setAgent(Agent agent) { this.agent = agent; }
+    public Http getHttp() { return http; }
+    public void setHttp(Http http) { this.http = http; }
 
     public static class Embedding {
         private String provider = "mistral";
@@ -96,17 +100,16 @@ public class RagProperties {
         public void setRetryBackoffMillis(long retryBackoffMillis) { this.retryBackoffMillis = retryBackoffMillis; }
     }
 
-    /** Kept so the provider can be switched back via config without code changes. */
-    public static class Gemini {
-        private String apiKey;
-        private String baseUrl = "https://generativelanguage.googleapis.com/v1beta";
-        private int embedBatchSize = 100;
-        public String getApiKey() { return apiKey; }
-        public void setApiKey(String apiKey) { this.apiKey = apiKey; }
-        public String getBaseUrl() { return baseUrl; }
-        public void setBaseUrl(String baseUrl) { this.baseUrl = baseUrl; }
-        public int getEmbedBatchSize() { return embedBatchSize; }
-        public void setEmbedBatchSize(int embedBatchSize) { this.embedBatchSize = embedBatchSize; }
+    /** Ingestion input bounds. */
+    public static class Ingest {
+        /**
+         * Max size (bytes) of a single uploaded file, enforced before extraction so a huge upload
+         * can't exhaust memory. Distinct from Spring's multipart limit (which bounds the whole
+         * request); this is a per-file cap the controller checks. Default 10 MB.
+         */
+        private long maxFileBytes = 10_000_000;
+        public long getMaxFileBytes() { return maxFileBytes; }
+        public void setMaxFileBytes(long maxFileBytes) { this.maxFileBytes = maxFileBytes; }
     }
 
     public static class Chunking {
@@ -134,6 +137,21 @@ public class RagProperties {
         public void setSimilarityThreshold(double similarityThreshold) {
             this.similarityThreshold = similarityThreshold;
         }
+    }
+
+    /**
+     * Timeouts applied to every outbound provider HTTP call (embedding + LLM), so a hung provider
+     * socket can't pin a Tomcat request thread indefinitely. Shared across all providers.
+     */
+    public static class Http {
+        /** TCP connect timeout (ms). Short: a provider we can't even connect to should fail quickly. */
+        private long connectTimeoutMs = 5000;
+        /** Socket read timeout (ms). Generous: LLM generation can legitimately take tens of seconds. */
+        private long readTimeoutMs = 60000;
+        public long getConnectTimeoutMs() { return connectTimeoutMs; }
+        public void setConnectTimeoutMs(long connectTimeoutMs) { this.connectTimeoutMs = connectTimeoutMs; }
+        public long getReadTimeoutMs() { return readTimeoutMs; }
+        public void setReadTimeoutMs(long readTimeoutMs) { this.readTimeoutMs = readTimeoutMs; }
     }
 
     /** Agentic loop (M3): query reformulation. */
