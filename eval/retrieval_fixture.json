@@ -1,22 +1,19 @@
 [
-  {
-    "question": "REPLACE_ME: an in-corpus question you would actually ask about the loaded documents",
-    "expectSnippets": [
-      "REPLACE_ME: a distinctive phrase that MUST appear verbatim in a correct chunk"
-    ],
-    "expectSource": "OS.pdf",
-    "expectRefusal": false
-  },
-  {
-    "question": "REPLACE_ME: another in-corpus question (expectSource is optional; drop it if not useful)",
-    "expectSnippets": [
-      "REPLACE_ME: another distinctive phrase from the source text"
-    ],
-    "expectRefusal": false
-  },
-  {
-    "question": "REPLACE_ME: an OUT-OF-CORPUS question whose answer is deliberately NOT in the documents",
-    "expectSnippets": [],
-    "expectRefusal": true
-  }
+  { "question": "How does the guide define an entrepreneur?", "expectRefusal": false, "expectSnippets": ["change agents"] },
+  { "question": "What goal does a social entrepreneur pursue?", "expectRefusal": false, "expectSnippets": ["triple bottom line"] },
+  { "question": "What term describes serial entrepreneurs who repeatedly start, grow and sell businesses?", "expectRefusal": false, "expectSnippets": ["leapfroggers"] },
+  { "question": "What does the determination or grit trait note about Fortune 500 companies?", "expectRefusal": false, "expectSnippets": ["recessions or bear markets"] },
+  { "question": "What is the nucleus of the Ernst & Young entrepreneur DNA model?", "expectRefusal": false, "expectSnippets": ["Opportunistic mind-set"] },
+  { "question": "Which step of the creative process is the sudden breakthrough moment?", "expectRefusal": false, "expectSnippets": ["Illumination", "aha"] },
+  { "question": "What is the difference between left-brain and right-brain thinking?", "expectRefusal": false, "expectSnippets": ["convergent", "divergent"] },
+  { "question": "What does the guide call the biggest barrier to creative thinking?", "expectRefusal": false, "expectSnippets": ["I am not creative"] },
+  { "question": "How is innovation defined in the guide?", "expectRefusal": false, "expectSnippets": ["apply creative solutions"] },
+  { "question": "What did Schumpeter say success is?", "expectRefusal": false, "expectSnippets": ["a feat of will, not intellect"] },
+  { "question": "What quote from Warren Bennis is included?", "expectRefusal": false, "expectSnippets": ["live and die by the quality of their ideas"] },
+  { "question": "What does the guide say about an entrepreneur's income as a drawback?", "expectRefusal": false, "expectSnippets": ["owner is paid last"] },
+
+  { "question": "What is the capital of France?", "expectRefusal": true, "expectSnippets": [] },
+  { "question": "What legal forms do I file to register a company?", "expectRefusal": true, "expectSnippets": [] },
+  { "question": "Who founded Microsoft?", "expectRefusal": true, "expectSnippets": [] },
+  { "question": "What is the current average startup valuation?", "expectRefusal": true, "expectSnippets": [] }
 ]

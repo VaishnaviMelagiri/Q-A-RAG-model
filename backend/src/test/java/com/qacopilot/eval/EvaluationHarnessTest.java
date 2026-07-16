@@ -78,13 +78,17 @@ class EvaluationHarnessTest {
     private List<FixtureItem> fixture;
     private List<FixtureItem> inCorpus;
     private List<FixtureItem> outCorpus;
-    private List<ItemStat> stats;   // one pipeline run per fixture item, reused across metrics
+    private List<ItemStat> stats;   // completed full-pipeline runs (may be partial if throttled)
+    private final Map<FixtureItem, List<ScoredChunk>> retrievals = new HashMap<>();  // LLM-free, reused
+    private long totalChunks;
+    private int topKUsed;
+    private long pauseMs;
 
     // Report sections (assembled by writeResults()).
     private String corpusLine;
     private int latencyN;
     private String latencyTable, retrievalTable, redundancyLine, refusalTable, agenticTable,
-            costTable, citationLine, relevanceLine, groundednessLine, determinismLine;
+            costTable, citationLine, relevanceLine, groundednessLine, determinismLine, incompleteNote;
 
     @BeforeAll
     void setUp() throws IOException {
@@ -95,61 +99,105 @@ class EvaluationHarnessTest {
                 "No corpus loaded — ingest the eval documents before running the harness.");
         inCorpus = fixture.stream().filter(i -> !i.expectsRefusal()).toList();
         outCorpus = fixture.stream().filter(FixtureItem::expectsRefusal).toList();
+        totalChunks = store.countChunks();
+        topKUsed = Math.max(5, props.getRetrieval().getTopK());
+        pauseMs = Long.getLong("eval.pauseMs", 1500L);
         corpusLine = describeCorpus();
         log.info("Eval: fixture N={} (in-corpus={}, out-of-corpus={}), corpus=[{}]",
                 fixture.size(), inCorpus.size(), outCorpus.size(), corpusLine);
     }
 
+    /**
+     * Retrieval quality — LLM-FREE (embedding + vector search only), so it completes on a free tier
+     * without hitting chat rate limits. Runs first and never calls the judge/generator/verifier.
+     */
     @Test
     @Order(1)
-    void latency() {
-        latencyN = Integer.getInteger("eval.n", 50);
-        log.warn("Latency: {} reps x {} questions = {} full-pipeline runs (paid). Use -Deval.n=3 to keep it cheap.",
-                latencyN, fixture.size(), latencyN * fixture.size());
-        List<Long> embed = new ArrayList<>(), retrieve = new ArrayList<>(), judge = new ArrayList<>(),
-                generate = new ArrayList<>(), verify = new ArrayList<>(), reformulate = new ArrayList<>(),
-                total = new ArrayList<>();
-        for (int rep = 0; rep < latencyN; rep++) {
-            for (FixtureItem item : fixture) {
-                StageTimings t = queryService.answerTimed(item.question()).timings();
-                embed.add(t.embedNanos()); retrieve.add(t.retrieveNanos()); judge.add(t.judgeNanos());
-                generate.add(t.generateNanos()); verify.add(t.verifyNanos());
-                reformulate.add(t.reformulateNanos()); total.add(t.totalNanos());
-            }
+    void retrievalMetrics() {
+        for (FixtureItem item : fixture) {
+            retrievals.put(item, store.searchTopK(embeddings.embedQuery(item.question()), topKUsed));
         }
-        StringBuilder sb = new StringBuilder("| Stage | p50 (ms) | p95 (ms) |\n|---|---|---|\n");
-        sb.append(latRow("embed", embed)).append(latRow("retrieve", retrieve)).append(latRow("judge", judge))
-          .append(latRow("generate", generate)).append(latRow("verify", verify))
-          .append(latRow("reformulate", reformulate)).append(latRow("end-to-end", total));
-        latencyTable = sb.toString();
-        System.out.println("\n=== Latency (p50/p95 over " + total.size() + " runs) ===\n" + latencyTable);
+        retrievalTable = computeRetrieval();
+        redundancyLine = computeRedundancy();
+        System.out.println("\n=== Retrieval quality (LLM-free; in-corpus N=" + inCorpus.size()
+                + ", k=" + topKUsed + ", corpus=" + totalChunks + " chunks) ===\n"
+                + retrievalTable + redundancyLine);
     }
 
     @Test
     @Order(2)
-    void coreMetrics() {
-        int k = Math.max(5, props.getRetrieval().getTopK());
-        stats = new ArrayList<>();
-        for (FixtureItem item : fixture) {
-            List<ScoredChunk> retrieved = store.searchTopK(embeddings.embedQuery(item.question()), k);
-            llm.reset();
-            AnswerResult ar = queryService.answer(item.question());
-            stats.add(new ItemStat(item, ar, retrieved, llm.calls(), llm.estTokens()));
+    void latency() {
+        latencyN = Integer.getInteger("eval.n", 50);
+        log.warn("Latency: up to {} reps x {} questions full-pipeline runs (paid). Use -Deval.n=3 to keep it cheap.",
+                latencyN, fixture.size());
+        List<Long> embed = new ArrayList<>(), retrieve = new ArrayList<>(), judge = new ArrayList<>(),
+                generate = new ArrayList<>(), verify = new ArrayList<>(), reformulate = new ArrayList<>(),
+                total = new ArrayList<>();
+        int failed = 0;
+        outer:
+        for (int rep = 0; rep < latencyN; rep++) {
+            for (FixtureItem item : fixture) {
+                try {
+                    StageTimings t = queryService.answerTimed(item.question()).timings();
+                    embed.add(t.embedNanos()); retrieve.add(t.retrieveNanos()); judge.add(t.judgeNanos());
+                    generate.add(t.generateNanos()); verify.add(t.verifyNanos());
+                    reformulate.add(t.reformulateNanos()); total.add(t.totalNanos());
+                } catch (RuntimeException e) {
+                    failed++;
+                    log.warn("Latency run skipped (rate-limited/incomplete): {}", rootMessage(e));
+                    if (failed > fixture.size()) break outer; // persistent throttling: stop early
+                }
+                pause();
+            }
         }
-        retrievalTable = computeRetrieval(k);
-        redundancyLine = computeRedundancy(k);
+        if (total.isEmpty()) {
+            latencyTable = "_Latency skipped — all runs rate-limited/incomplete._\n";
+        } else {
+            StringBuilder sb = new StringBuilder("| Stage | p50 (ms) | p95 (ms) |\n|---|---|---|\n");
+            sb.append(latRow("embed", embed)).append(latRow("retrieve", retrieve)).append(latRow("judge", judge))
+              .append(latRow("generate", generate)).append(latRow("verify", verify))
+              .append(latRow("reformulate", reformulate)).append(latRow("end-to-end", total));
+            latencyTable = sb.toString()
+                    + (failed > 0 ? String.format("%n_%d run(s) skipped (rate-limited)._%n", failed) : "");
+        }
+        System.out.println("\n=== Latency (p50/p95 over " + total.size() + " runs) ===\n" + latencyTable);
+    }
+
+    /**
+     * Full-pipeline metrics (refusal accuracy, agentic loop, cost, citation overlap) — these need the
+     * LLM. Rate-limit resilient: pauses between items and, if an item still fails (e.g. a 429 survives
+     * UpstreamRetry), records it as incomplete and continues, writing PARTIAL results.
+     */
+    @Test
+    @Order(3)
+    void pipelineMetrics() {
+        stats = new ArrayList<>();
+        int incomplete = 0;
+        for (FixtureItem item : fixture) {
+            llm.reset();
+            try {
+                AnswerResult ar = queryService.answer(item.question());
+                stats.add(new ItemStat(item, ar, retrievals.get(item), llm.calls(), llm.estTokens()));
+            } catch (RuntimeException e) {
+                incomplete++;
+                log.warn("Pipeline item rate-limited/incomplete, skipping '{}': {}",
+                        item.question(), rootMessage(e));
+            }
+            pause();
+        }
+        incompleteNote = incomplete == 0 ? ""
+                : String.format("%n_⚠ %d of %d items were rate-limited/incomplete and excluded from the "
+                        + "pipeline metrics above._%n", incomplete, fixture.size());
         refusalTable = computeRefusal();
         agenticTable = computeAgentic();
         costTable = computeCost();
         citationLine = computeCitationOverlap();
-        System.out.println("\n=== Retrieval (in-corpus N=" + inCorpus.size() + ", k=" + k + ") ===\n" + retrievalTable
-                + redundancyLine + "\n\n=== Refusal ===\n" + refusalTable
-                + "\n=== Agentic loop ===\n" + agenticTable + "\n=== Cost ===\n" + costTable
-                + "\n=== Citations ===\n" + citationLine);
+        System.out.println("\n=== Refusal ===\n" + refusalTable + "\n=== Agentic loop ===\n" + agenticTable
+                + "\n=== Cost ===\n" + costTable + "\n=== Citations ===\n" + citationLine + incompleteNote);
     }
 
     @Test
-    @Order(3)
+    @Order(4)
     void answerQuality() throws IOException {
         Assumptions.assumeTrue(Boolean.getBoolean("eval.answerquality"),
                 "LLM-judged answer quality is off — enable with -Deval.answerquality=true (extra paid calls).");
@@ -165,7 +213,7 @@ class EvaluationHarnessTest {
     }
 
     @Test
-    @Order(4)
+    @Order(5)
     void determinism() {
         Assumptions.assumeTrue(Boolean.getBoolean("eval.consistency"),
                 "Determinism check is off — enable with -Deval.consistency=true (3x paid runs on a sample).");
@@ -173,9 +221,11 @@ class EvaluationHarnessTest {
         int stable = 0;
         for (FixtureItem item : sample) {
             String d0 = decision(queryService.answer(item.question()));
+            pause();
             boolean same = true;
             for (int i = 0; i < 2; i++) {
                 same &= d0.equals(decision(queryService.answer(item.question())));
+                pause();
             }
             if (same) stable++;
         }
@@ -186,7 +236,7 @@ class EvaluationHarnessTest {
 
     @AfterAll
     void writeResults() throws IOException {
-        if (stats == null && latencyTable == null) {
+        if (retrievalTable == null && latencyTable == null && stats == null) {
             return; // skipped (placeholder/empty corpus)
         }
         StringBuilder md = new StringBuilder("# Evaluation results\n\n")
@@ -196,11 +246,17 @@ class EvaluationHarnessTest {
                 .append(" hand-labeled questions (in-corpus ").append(inCorpus.size())
                 .append(", out-of-corpus ").append(outCorpus.size()).append(")\n")
                 .append("- **Latency repetitions:** ").append(latencyN).append(" per question\n\n");
+        String retrievalBody = retrievalTable == null ? null
+                : retrievalTable + redundancyLine
+                    + String.format("%n_Retrieval measured with k=%d over %d in-corpus items; the corpus "
+                        + "holds %d chunks. With k close to the chunk count, recall@k trends to 1.0 "
+                        + "trivially — read these numbers against that count._%n",
+                        topKUsed, inCorpus.size(), totalChunks);
+        appendSection(md, "Retrieval quality (LLM-free)", retrievalBody);
         appendSection(md, "Latency — p50 / p95", latencyTable);
-        appendSection(md, "Retrieval", retrievalTable == null ? null : retrievalTable + redundancyLine);
         appendSection(md, "Answer — citations / relevance / groundedness",
                 join(citationLine, relevanceLine, groundednessLine));
-        appendSection(md, "Refusal", refusalTable);
+        appendSection(md, "Refusal", refusalTable == null ? null : refusalTable + n(incompleteNote));
         appendSection(md, "Agentic loop", agenticTable);
         appendSection(md, "Cost per query", costTable);
         appendSection(md, "Consistency", determinismLine);
@@ -213,21 +269,25 @@ class EvaluationHarnessTest {
         System.out.println("\nWrote " + out.toAbsolutePath());
     }
 
+    private static String n(String s) {
+        return s == null ? "" : s;
+    }
+
     // --- metric computations ---
 
-    private String computeRetrieval(int k) {
+    private String computeRetrieval() {
         if (inCorpus.isEmpty()) {
             return "_No in-corpus items in the fixture._\n";
         }
         int n = inCorpus.size();
         int hit1 = 0, hit3 = 0, hit5 = 0;
         double mrr = 0, precisionSum = 0, ndcgSum = 0;
-        for (ItemStat s : statsFor(inCorpus)) {
-            List<ScoredChunk> r = s.retrieved();
+        for (FixtureItem item : inCorpus) {
+            List<ScoredChunk> r = retrievals.get(item);
             boolean[] rel = new boolean[r.size()];
             int matches = 0, rank = 0;
             for (int i = 0; i < r.size(); i++) {
-                rel[i] = EvalSupport.matches(r.get(i), s.item());
+                rel[i] = EvalSupport.matches(r.get(i), item);
                 if (rel[i]) {
                     matches++;
                     if (rank == 0) rank = i + 1;
@@ -237,21 +297,20 @@ class EvaluationHarnessTest {
             if (rank >= 1 && rank <= 3) hit3++;
             if (rank >= 1 && rank <= 5) hit5++;
             if (rank >= 1) mrr += 1.0 / rank;
-            precisionSum += matches / (double) k;
+            precisionSum += matches / (double) topKUsed;
             ndcgSum += EvalSupport.ndcg(rel);
         }
         return String.format("| Metric | Value |%n|---|---|%n"
                 + "| recall@1 | %.3f |%n| recall@3 | %.3f |%n| recall@5 | %.3f |%n"
                 + "| context precision@%d | %.3f |%n| NDCG@%d | %.3f |%n| MRR | %.3f |%n",
                 hit1 / (double) n, hit3 / (double) n, hit5 / (double) n,
-                k, precisionSum / n, k, ndcgSum / n, mrr / n);
+                topKUsed, precisionSum / n, topKUsed, ndcgSum / n, mrr / n);
     }
 
-    private String computeRedundancy(int k) {
+    private String computeRedundancy() {
         double overlapSum = 0;
         int dupPairSum = 0, counted = 0;
-        for (ItemStat s : stats) {
-            List<ScoredChunk> r = s.retrieved();
+        for (List<ScoredChunk> r : retrievals.values()) {
             if (r.size() < 2) continue;
             List<Set<String>> toks = r.stream().map(c -> EvalSupport.tokens(c.content())).toList();
             double sum = 0; int pairs = 0, dups = 0;
@@ -268,25 +327,31 @@ class EvaluationHarnessTest {
         }
         if (counted == 0) return "";
         return String.format("%n_Chunk redundancy@%d: mean pairwise overlap %.3f; %.2f near-duplicate "
-                + "(>50%%) pairs per query._%n", k, overlapSum / counted, dupPairSum / (double) counted);
+                + "(>50%%) pairs per query._%n", topKUsed, overlapSum / counted, dupPairSum / (double) counted);
     }
 
+    // The pipeline metrics below use COMPLETED items only (stats), so partial runs still report.
     private String computeRefusal() {
-        long inRefused = statsFor(inCorpus).stream().filter(s -> s.ar().refused()).count();
-        long outAnswered = statsFor(outCorpus).stream().filter(s -> !s.ar().refused()).count();
+        List<ItemStat> inC = stats.stream().filter(s -> !s.item().expectsRefusal()).toList();
+        List<ItemStat> outC = stats.stream().filter(s -> s.item().expectsRefusal()).toList();
+        long inRefused = inC.stream().filter(s -> s.ar().refused()).count();
+        long outAnswered = outC.stream().filter(s -> !s.ar().refused()).count();
         long correct = stats.stream().filter(s -> s.ar().refused() == s.item().expectsRefusal()).count();
-        String falseRefusal = inCorpus.isEmpty() ? "n/a"
-                : String.format("%.3f (%d/%d)", inRefused / (double) inCorpus.size(), inRefused, inCorpus.size());
-        String leakage = outCorpus.isEmpty() ? "n/a"
-                : String.format("%.3f (%d/%d)", outAnswered / (double) outCorpus.size(), outAnswered, outCorpus.size());
+        String falseRefusal = inC.isEmpty() ? "n/a"
+                : String.format("%.3f (%d/%d)", inRefused / (double) inC.size(), inRefused, inC.size());
+        String leakage = outC.isEmpty() ? "n/a"
+                : String.format("%.3f (%d/%d)", outAnswered / (double) outC.size(), outAnswered, outC.size());
+        String accuracy = stats.isEmpty() ? "n/a"
+                : String.format("%.3f (%d/%d)", correct / (double) stats.size(), correct, stats.size());
         return String.format("| Metric | Value |%n|---|---|%n"
                 + "| false-refusal rate (answerable refused) | %s |%n"
                 + "| out-of-scope leakage (out-of-corpus answered) | %s |%n"
-                + "| refusal accuracy | %.3f (%d/%d) |%n",
-                falseRefusal, leakage, correct / (double) fixture.size(), correct, fixture.size());
+                + "| refusal accuracy | %s |%n",
+                falseRefusal, leakage, accuracy);
     }
 
     private String computeAgentic() {
+        if (stats.isEmpty()) return "_No completed items._\n";
         long triggered = stats.stream().filter(s -> s.ar().rounds() > 0).count();
         long wins = stats.stream().filter(s -> s.ar().rounds() > 0 && !s.ar().refused()).count();
         String winRate = triggered == 0 ? "n/a"
@@ -294,10 +359,11 @@ class EvaluationHarnessTest {
         return String.format("| Metric | Value |%n|---|---|%n"
                 + "| reformulation trigger rate | %.3f (%d/%d) |%n"
                 + "| reformulation win rate (fired → answered) | %s |%n",
-                triggered / (double) fixture.size(), triggered, fixture.size(), winRate);
+                triggered / (double) stats.size(), triggered, stats.size(), winRate);
     }
 
     private String computeCost() {
+        if (stats.isEmpty()) return "_No completed items._\n";
         double[] calls = stats.stream().mapToDouble(ItemStat::llmCalls).toArray();
         double[] toks = stats.stream().mapToDouble(s -> s.estTokens()).toArray();
         return String.format("| Metric | mean | p95 |%n|---|---|---|%n"
@@ -412,8 +478,23 @@ class EvaluationHarnessTest {
 
     // --- helpers ---
 
-    private List<ItemStat> statsFor(List<FixtureItem> subset) {
-        return stats.stream().filter(s -> subset.contains(s.item())).toList();
+    /** Pause between paid LLM calls to stay under free-tier rate limits (-Deval.pauseMs, default 1500). */
+    private void pause() {
+        if (pauseMs > 0) {
+            try {
+                Thread.sleep(pauseMs);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+    }
+
+    private static String rootMessage(Throwable t) {
+        Throwable cur = t;
+        while (cur.getCause() != null && cur.getCause() != cur) {
+            cur = cur.getCause();
+        }
+        return cur.getClass().getSimpleName() + ": " + cur.getMessage();
     }
 
     private List<CitationCheck> citationChecks(AnswerResult ar) {

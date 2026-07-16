@@ -53,10 +53,24 @@ cd backend
 MISTRAL_API_KEY=... ./mvnw test -Dgroups=eval
 ```
 
-Always run (cheap, mostly observational): latency, retrieval metrics, redundancy, refusal accuracy,
-agentic-loop rates, cost, and overlap-based citation correctness — one pipeline run per question.
+### Cheapest useful run: retrieval quality only (no chat calls, no 429)
+Recall@k / MRR / precision / NDCG / redundancy need only embeddings + vector search — **no**
+judge/generate/verify. Run just that method to get retrieval numbers on a free tier without rate
+limiting:
+```bash
+cd backend && set -a && source ../.env && set +a
+./mvnw test -Dgroups=eval -Dtest='EvaluationHarnessTest#retrievalMetrics'
+```
+This writes the **Retrieval quality** section of `RESULTS.md` using ~1 embedding call per question.
+
+### Full run
+`./mvnw test -Dgroups=eval` runs everything. Latency and the pipeline metrics (refusal, agentic,
+cost, citation overlap) make paid chat calls; they are **rate-limit resilient** — a pause runs
+between items and any item that still 429s is recorded as incomplete so partial results are still
+written (retrieval is unaffected).
 
 Options (system properties):
+- `-Deval.pauseMs=1500` — pause between paid LLM calls (default 1500ms) to stay under free-tier limits.
 - `-Deval.n=50` — latency repetitions per question (**default 50**). ⚠️ Cost: latency runs the FULL
   pipeline `n × (#questions)` times, each ~3 paid LLM calls. For a cheap sanity check use
   `-Deval.n=3`.
