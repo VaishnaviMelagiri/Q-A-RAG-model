@@ -157,8 +157,9 @@ Every `/query` response reports the full decision trail: `refused`, `refusedBy`
 ## Provider abstraction
 `EmbeddingClient` and `LlmClient` are interfaces; concrete impls are chosen by
 `@ConditionalOnProperty` on `rag.embedding.provider` / `rag.llm.provider`. Active provider is
-Mistral (Bearer auth, OpenAI-shaped API); a Gemini embedding impl is retained. Missing API key
-fails fast at startup via a `FailureAnalyzer` (key length logged, never the key).
+Mistral (Bearer auth, OpenAI-shaped API); adding another provider is a new impl behind the same
+interface, selected by config. Missing API key fails fast at startup via a `FailureAnalyzer`
+(key length logged, never the key).
 
 ## What makes it agentic (Milestone 3, implemented)
 The LLM controls not just relevance/groundedness but **retrieval itself** and **output shape**:

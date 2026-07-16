@@ -2,6 +2,13 @@
 // so the components can render a distinct state for: a normal response, a rate-limit (503), or an
 // error — without a try/catch in every component.
 
+// Build a user-facing error string from an ApiError body. The backend keeps `detail` generic and
+// safe; when it also sends a `correlationId`, append it so the user can quote it in a bug report.
+function errorMessage(data, fallback) {
+  const base = data?.detail || data?.message || fallback;
+  return data?.correlationId ? `${base} (ref: ${data.correlationId})` : base;
+}
+
 /**
  * POST /api/query. Returns one of:
  *   { kind: 'response',     data }        // backend QueryResponse (may itself be refused:true)
@@ -26,8 +33,7 @@ export async function query(question) {
 
   const data = await res.json().catch(() => null);
   if (!res.ok) {
-    const detail = data?.detail || data?.message || `Request failed (HTTP ${res.status}).`;
-    return { kind: 'error', message: detail };
+    return { kind: 'error', message: errorMessage(data, `Request failed (HTTP ${res.status}).`) };
   }
   return { kind: 'response', data };
 }
@@ -39,7 +45,7 @@ export async function getCorpus() {
     // stale cached response — otherwise the UI shows old counts after a mutation.
     const res = await fetch('/api/corpus', { cache: 'no-store' });
     const data = await res.json().catch(() => null);
-    if (!res.ok) return { kind: 'error', message: data?.detail || `Failed to load corpus (HTTP ${res.status}).` };
+    if (!res.ok) return { kind: 'error', message: errorMessage(data, `Failed to load corpus (HTTP ${res.status}).`) };
     return { kind: 'ok', data };
   } catch {
     return { kind: 'error', message: 'Could not reach the server.' };
@@ -51,7 +57,7 @@ export async function clearCorpus() {
   try {
     const res = await fetch('/api/corpus', { method: 'DELETE' });
     const data = await res.json().catch(() => null);
-    if (!res.ok) return { kind: 'error', message: data?.detail || `Clear failed (HTTP ${res.status}).` };
+    if (!res.ok) return { kind: 'error', message: errorMessage(data, `Clear failed (HTTP ${res.status}).`) };
     return { kind: 'ok', data };
   } catch {
     return { kind: 'error', message: 'Could not reach the server.' };
@@ -68,7 +74,7 @@ export async function ingest(files) {
     const res = await fetch('/api/ingest', { method: 'POST', body: form });
     const data = await res.json().catch(() => null);
     if (!res.ok) {
-      return { kind: 'error', message: data?.detail || data?.message || `Ingest failed (HTTP ${res.status}).` };
+      return { kind: 'error', message: errorMessage(data, `Ingest failed (HTTP ${res.status}).`) };
     }
     return { kind: 'ok', data };
   } catch {

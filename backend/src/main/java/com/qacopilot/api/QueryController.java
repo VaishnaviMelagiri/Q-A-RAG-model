@@ -3,6 +3,9 @@ package com.qacopilot.api;
 import com.qacopilot.pipeline.AnswerResult;
 import com.qacopilot.pipeline.QueryService;
 import com.qacopilot.retrieval.ScoredChunk;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -34,11 +37,11 @@ public class QueryController {
     }
 
     @PostMapping("/query")
-    public ResponseEntity<QueryResponse> query(@RequestBody QueryRequest request) {
-        String question = request.question() == null ? "" : request.question().strip();
-        if (question.isEmpty()) {
-            return ResponseEntity.badRequest().body(QueryResponse.error("Question must not be blank."));
-        }
+    public ResponseEntity<QueryResponse> query(@Valid @RequestBody QueryRequest request) {
+        // @NotBlank/@Size on the record reject null/blank/oversize up front (-> 400 via the
+        // MethodArgumentNotValidException handler). Bean Validation does not trim, so we still
+        // strip/normalize here before handing the text to the pipeline.
+        String question = request.question().strip();
         return ResponseEntity.ok(QueryResponse.from(queryService.answer(question)));
     }
 
@@ -46,7 +49,10 @@ public class QueryController {
         return Math.round(v * 10000.0) / 10000.0;
     }
 
-    public record QueryRequest(String question) {}
+    public record QueryRequest(
+            @NotBlank(message = "question must not be blank")
+            @Size(max = 4000, message = "question must be at most 4000 characters")
+            String question) {}
 
     public record Citation(String sourceName, int chunkIndex, int startOffset, int endOffset,
                            double similarity, String excerpt) {}
@@ -77,11 +83,6 @@ public class QueryController {
                     r.judgeReason(), best, r.threshold(), r.verified(),
                     r.rounds(), r.reformulatedQuery(), r.answerShape(),
                     citations, r.unsupportedClaims());
-        }
-
-        static QueryResponse error(String message) {
-            return new QueryResponse(true, "request", message, null, null, null, null, false,
-                    0, null, null, List.of(), List.of());
         }
 
         private static Citation toCitation(ScoredChunk c) {
