@@ -1,5 +1,6 @@
 package com.qacopilot.api;
 
+import com.qacopilot.config.RagProperties;
 import com.qacopilot.ingest.IngestionService;
 import com.qacopilot.ingest.IngestionService.IngestResult;
 import org.springframework.http.HttpStatus;
@@ -33,9 +34,11 @@ import java.util.List;
 public class IngestController {
 
     private final IngestionService ingestion;
+    private final RagProperties props;
 
-    public IngestController(IngestionService ingestion) {
+    public IngestController(IngestionService ingestion, RagProperties props) {
         this.ingestion = ingestion;
+        this.props = props;
     }
 
     @PostMapping("/ingest")
@@ -43,8 +46,18 @@ public class IngestController {
         if (files == null || files.isEmpty()) {
             return ResponseEntity.badRequest().body("No files uploaded (use form field 'files').");
         }
+        // Validate every file BEFORE clearing/ingesting anything, so a single bad file in the batch
+        // (over-size / unsupported type) fails the whole request without wiping the existing corpus.
+        long maxBytes = props.getIngest().getMaxFileBytes();
+        for (MultipartFile file : files) {
+            if (file.getSize() > maxBytes) {
+                throw new IllegalArgumentException(
+                        "File '" + file.getOriginalFilename() + "' is " + file.getSize()
+                        + " bytes, over the " + maxBytes + "-byte per-file limit (rag.ingest.max-file-bytes).");
+            }
+        }
         // Replace-on-upload: wipe the current set first so this upload stands alone. Done AFTER the
-        // empty-files guard so a bad request never clears an existing corpus.
+        // guards so a bad request never clears an existing corpus.
         ingestion.clearCorpus();
         List<IngestResult> results = new ArrayList<>();
         for (MultipartFile file : files) {

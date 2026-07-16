@@ -12,7 +12,7 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-ragdb}
       POSTGRES_USER: ${POSTGRES_USER:-rag}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-rag_local_pw}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env before running}
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
@@ -31,7 +31,7 @@ services:
       POSTGRES_PORT: 5432        # internal port on the compose network (fixed, not the host mapping)
       POSTGRES_DB: ${POSTGRES_DB:-ragdb}
       POSTGRES_USER: ${POSTGRES_USER:-rag}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-rag_local_pw}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env before running}
       # Cap the JVM heap so the backend fits a low-RAM laptop (default would grab ~1/4 of host RAM).
       # Override via JAVA_HEAP in .env if you have more headroom.
       JAVA_TOOL_OPTIONS: "-Xmx${JAVA_HEAP:-512m}"

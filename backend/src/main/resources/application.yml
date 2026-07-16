@@ -4,7 +4,7 @@ spring:
   datasource:
     url: jdbc:postgresql://${DB_HOST:localhost}:${POSTGRES_PORT:5432}/${POSTGRES_DB:ragdb}
     username: ${POSTGRES_USER:rag}
-    password: ${POSTGRES_PASSWORD:rag_local_pw}
+    password: ${POSTGRES_PASSWORD}
   flyway:
     enabled: true
     locations: classpath:db/migration
@@ -19,7 +19,7 @@ server:
 # --- RAG configuration (all tunable via env; see .env.example) ---
 rag:
   embedding:
-    provider: mistral           # provider-agnostic: swap impl (mistral|gemini) without touching business logic
+    provider: mistral           # provider-agnostic: swap the embedding impl via config without touching business logic
     model: mistral-embed        # Mistral embedding model
     dimension: 1024             # mistral-embed output dim; MUST match vector(N) in V1__init.sql
   llm:
@@ -33,10 +33,12 @@ rag:
                                  # (see MissingApiKeyFailureAnalyzer) instead of leaking a placeholder.
     base-url: https://api.mistral.ai/v1
     embed-batch-size: 100
-  gemini:                        # kept for config-only switch-back; unused while provider=mistral
-    api-key: ${GEMINI_API_KEY:}
-    base-url: https://generativelanguage.googleapis.com/v1beta
-    embed-batch-size: 100
+  http:                          # timeouts on all outbound provider calls (embedding + LLM), so a
+                                 # hung provider socket can't pin a Tomcat thread forever
+    connect-timeout-ms: 5000     # short: can't even connect -> fail fast
+    read-timeout-ms: 60000       # generous: LLM generation can take tens of seconds
+  ingest:
+    max-file-bytes: 10000000     # per-file upload cap (10 MB); over-size -> HTTP 400
   chunking:
     max-chars: 1000
     overlap-chars: 150

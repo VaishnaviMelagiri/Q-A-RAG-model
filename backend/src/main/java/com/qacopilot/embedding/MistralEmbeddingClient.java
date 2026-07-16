@@ -5,11 +5,14 @@ import com.qacopilot.support.UpstreamRetry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.web.client.ClientHttpRequestFactories;
+import org.springframework.boot.web.client.ClientHttpRequestFactorySettings;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -41,7 +44,11 @@ public class MistralEmbeddingClient implements EmbeddingClient {
                 "MISTRAL_API_KEY is not set (resolved value: '" + apiKey + "').");
         }
         this.model = props.getEmbedding().getModel();
+        var timeouts = ClientHttpRequestFactorySettings.DEFAULTS
+                .withConnectTimeout(Duration.ofMillis(props.getHttp().getConnectTimeoutMs()))
+                .withReadTimeout(Duration.ofMillis(props.getHttp().getReadTimeoutMs()));
         this.http = RestClient.builder()
+                .requestFactory(ClientHttpRequestFactories.get(timeouts))
                 .baseUrl(props.getMistral().getBaseUrl())
                 .defaultHeader(HttpHeaders.AUTHORIZATION, "Bearer " + apiKey)
                 .defaultHeader(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
